@@ -1,12 +1,12 @@
-app = 'trading-2'
-primary_region = 'nrt'
+app = "trading-2-bbx5hg"
+primary_region = "nrt"
 
 [build]
 
 [processes]
-worker = "python -m app"
+worker = "python app/main.py"
 
 [[vm]]
-  memory = '1gb'
-  cpu_kind = 'shared'
+  memory = "1gb"
+  cpu_kind = "shared"
   cpus = 1
