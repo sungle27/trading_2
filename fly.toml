@@ -1,10 +1,10 @@
-app = "trading-2-bbx5hg"
+app = "trading-worker"
 primary_region = "nrt"
 
 [build]
 
 [processes]
-worker = "python app/main.py"
+worker = "python -m app.main"
 
 [[vm]]
   memory = "1gb"
