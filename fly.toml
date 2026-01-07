@@ -1,4 +1,4 @@
-app = "trading-worker"
+app = "trading-2-gb7cdg"
 primary_region = "nrt"
 
 [build]
@@ -7,6 +7,6 @@ primary_region = "nrt"
 worker = "python -m app.main"
 
 [[vm]]
-  memory = "1gb"
   cpu_kind = "shared"
   cpus = 1
+  memory = "1gb"
