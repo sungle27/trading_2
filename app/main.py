@@ -24,8 +24,6 @@ from .indicators import RSI, EMA, MACD
 from .modeling import load_models, predict
 from .mysql_writer import MySQLWriter, MySQLConfig
 from .utils import logret, rolling_std, backoff_s
-from .alert_engine import ctx_filters_signal
-
 #bo sung 10-01-2026 ->
 from indicators import VolumeSMA, DirectionalVolume
 
@@ -425,6 +423,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
