@@ -38,13 +38,7 @@ class SymbolState:
         self.ema20_15m = EMA(20)
         self.ema50_15m = EMA(50)
         self.macd_15m = MACD()
-
-        #filter trend 30 phút
-        self.r30m = TimeframeResampler(30 * 60)
-        self.ema20_30m = EMA(20)
-        self.ema50_30m = EMA(50)
-
-
+        
         self.ema50_1h = EMA(50)
 
         # === Volume spike (5m) ===
@@ -89,7 +83,7 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
     await send_telegram(
         TELEGRAM_BOT_TOKEN,
         TELEGRAM_CHAT_ID,
-        "✅ Bot started (5m trigger + explainable alerts) llsung_10-01-2026 v3.0.0"
+        "✅ Bot started (5m trigger + explainable alerts)"
     )
 
     while True:
@@ -124,35 +118,19 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
                                     st.vol_dir_5m_val = st.vol_dir_5m.update(closed5.close, vol)
 
                                 # ===== 15m trend =====
-                                #closed15, did15 = st.r15m.update(st.cur_sec, mid, st.volume)
-                                #if did15 and closed15:
-                                #    st.rsi_15m.update(closed15.close)
-                                #    st.ema20_15m.update(closed15.close)
-                                #    st.ema50_15m.update(closed15.close)
-                                #    st.macd_15m.update(closed15.close)
-                                #    st.ema50_1h.update(closed15.close)
-                                # ===== 30m trend filter =====
-                                
-                                # ctx = {
-                                #         "rsi_5m": st.rsi_5m.value,
-                                #         "rsi_15m": st.rsi_15m.value,
-                                #         "ema20_15m": st.ema20_15m.value,
-                                #         "ema50_15m": st.ema50_15m.value,
-                                #         "ema50_1h": st.ema50_1h.value,
-                                #         "macd_hist_15m": st.macd_15m.hist,
-                                #         "vol_ratio_5m": st.vol_ratio_5m,
-                                #         "vol_dir_5m": st.vol_dir_5m_val,
-                                #     }
-                                closed30, did30 = st.r30m.update(st.cur_sec, mid, st.volume)
-                                if did30 and closed30:
-                                    st.ema20_30m.update(closed30.close)
-                                    st.ema50_30m.update(closed30.close)
+                                closed15, did15 = st.r15m.update(st.cur_sec, mid, st.volume)
+                                if did15 and closed15:
+                                    st.rsi_15m.update(closed15.close)
+                                    st.ema20_15m.update(closed15.close)
+                                    st.ema50_15m.update(closed15.close)
+                                    st.macd_15m.update(closed15.close)
+                                    st.ema50_1h.update(closed15.close)
 
-                                    
                                     ctx = {
                                         "rsi_5m": st.rsi_5m.value,
-                                        "ema20_15m": st.ema20_30m.value,   # map 30m → slot trend
-                                        "ema50_15m": st.ema50_30m.value,
+                                        "rsi_15m": st.rsi_15m.value,
+                                        "ema20_15m": st.ema20_15m.value,
+                                        "ema50_15m": st.ema50_15m.value,
                                         "ema50_1h": st.ema50_1h.value,
                                         "macd_hist_15m": st.macd_15m.hist,
                                         "vol_ratio_5m": st.vol_ratio_5m,
