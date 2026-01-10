@@ -45,6 +45,15 @@ FALLBACK_SYMBOLS = [
     "1000SHIBUSDT",
     "1000FLOKIUSDT",
     "1000BONKUSDT",
+
+     # ==================================================
+    # SUNG BO SUNG
+    # ==================================================
+    "BIFIUSDT",
+    "GMTUSDT",
+    "GPSUSDT",
+    "POLUSDT",
+    "XVSUSDT",
 ]
 
 
