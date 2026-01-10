@@ -25,6 +25,10 @@ from .modeling import load_models, predict
 from .mysql_writer import MySQLWriter, MySQLConfig
 from .utils import logret, rolling_std, backoff_s
 from .alert_engine import ctx_filters_signal
+from indicators import VolumeSMA, DirectionalVolume
+
+vol_sma_15m = VolumeSMA(period=20)
+vol_dir_15m = DirectionalVolume()
 
 HORIZON_SEC = 120
 
@@ -408,4 +412,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
