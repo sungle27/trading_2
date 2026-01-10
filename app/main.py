@@ -75,7 +75,7 @@ async def ws_bookticker(states: Dict[str, SymbolState], url: str):
 
 
 async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
-    await send_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "✅ Bot started (explainable alerts)")
+    await send_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "✅ Bot started (explainable alerts) l.l.sung_10-01-2026_v2")
 
     while True:
         try:
