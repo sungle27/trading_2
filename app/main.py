@@ -190,7 +190,7 @@ async def ws_bookticker(states: Dict[str, SymbolState], url: str):
 
 async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
     attempt = 0
-    await send_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "✅ Bot started (volume spike enabled)")
+    await send_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "✅ Bot started (volume spike enabled) llsung_10-01-2026_v1")
 
     while True:
         try:
