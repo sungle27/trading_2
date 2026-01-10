@@ -1,6 +1,5 @@
 from __future__ import annotations
 import asyncio, json, time
-from collections import deque
 from typing import Dict
 
 import aiohttp
@@ -8,7 +7,7 @@ import aiohttp
 from .config import (
     BINANCE_FUTURES_WS, BINANCE_FUTURES_REST, TOP_N,
     TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
-    ALERT_MODE, COOLDOWN_SEC, SPREAD_MAX,
+    COOLDOWN_SEC, SPREAD_MAX,
 )
 
 from .symbols import get_top_usdt_symbols
@@ -28,19 +27,25 @@ class SymbolState:
         self.cur_sec = None
         self.volume = 0.0
 
+        # === Resamplers ===
+        self.r5m = TimeframeResampler(5 * 60)
         self.r15m = TimeframeResampler(15 * 60)
 
+        # === Indicators ===
+        self.rsi_5m = RSI()
         self.rsi_15m = RSI()
+
         self.ema20_15m = EMA(20)
         self.ema50_15m = EMA(50)
         self.macd_15m = MACD()
 
         self.ema50_1h = EMA(50)
 
-        self.vol_sma_15m = VolumeSMA(20)
-        self.vol_dir_15m = DirectionalVolume()
-        self.vol_ratio_15m = 0.0
-        self.vol_dir_val = 0.0
+        # === Volume spike (5m) ===
+        self.vol_sma_5m = VolumeSMA(20)
+        self.vol_dir_5m = DirectionalVolume()
+        self.vol_ratio_5m = 0.0
+        self.vol_dir_5m_val = 0.0
 
         self.last_alert_sec = 0
 
@@ -75,7 +80,11 @@ async def ws_bookticker(states: Dict[str, SymbolState], url: str):
 
 
 async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
-    await send_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "✅ Bot started (explainable alerts) l.l.sung_10-01-2026_v2")
+    await send_telegram(
+        TELEGRAM_BOT_TOKEN,
+        TELEGRAM_CHAT_ID,
+        "✅ Bot started (5m trigger + explainable alerts)"
+    )
 
     while True:
         try:
@@ -98,27 +107,34 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
                         while sec > st.cur_sec:
                             mid = st.mid()
                             if mid:
-                                closed, did_close = st.r15m.update(st.cur_sec, mid, st.volume)
-                                if did_close and closed:
-                                    st.rsi_15m.update(closed.close)
-                                    st.ema20_15m.update(closed.close)
-                                    st.ema50_15m.update(closed.close)
-                                    st.macd_15m.update(closed.close)
-                                    st.ema50_1h.update(closed.close)
+                                # ===== 5m trigger =====
+                                closed5, did5 = st.r5m.update(st.cur_sec, mid, st.volume)
+                                if did5 and closed5:
+                                    st.rsi_5m.update(closed5.close)
 
-                                    vol = closed.volume
-                                    sma = st.vol_sma_15m.update(vol)
-                                    st.vol_ratio_15m = vol / max(sma, 1e-9)
-                                    st.vol_dir_val = st.vol_dir_15m.update(closed.close, vol)
+                                    vol = closed5.volume
+                                    sma = st.vol_sma_5m.update(vol)
+                                    st.vol_ratio_5m = vol / max(sma, 1e-9)
+                                    st.vol_dir_5m_val = st.vol_dir_5m.update(closed5.close, vol)
+
+                                # ===== 15m trend =====
+                                closed15, did15 = st.r15m.update(st.cur_sec, mid, st.volume)
+                                if did15 and closed15:
+                                    st.rsi_15m.update(closed15.close)
+                                    st.ema20_15m.update(closed15.close)
+                                    st.ema50_15m.update(closed15.close)
+                                    st.macd_15m.update(closed15.close)
+                                    st.ema50_1h.update(closed15.close)
 
                                     ctx = {
+                                        "rsi_5m": st.rsi_5m.value,
                                         "rsi_15m": st.rsi_15m.value,
                                         "ema20_15m": st.ema20_15m.value,
                                         "ema50_15m": st.ema50_15m.value,
                                         "ema50_1h": st.ema50_1h.value,
                                         "macd_hist_15m": st.macd_15m.hist,
-                                        "vol_ratio_15m": st.vol_ratio_15m,
-                                        "vol_dir_15m": st.vol_dir_val,
+                                        "vol_ratio_5m": st.vol_ratio_5m,
+                                        "vol_dir_5m": st.vol_dir_5m_val,
                                     }
 
                                     now_s = int(time.time())

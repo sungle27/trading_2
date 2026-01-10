@@ -94,8 +94,12 @@ def should_alert(
     # =========================
     # 1.5 VOLUME SPIKE (CORE)
     # =========================
-    vol_ratio = ctx.get("vol_ratio_15m", 0.0)
-    vol_dir = ctx.get("vol_dir_15m", 0.0)
+    #vol_ratio = ctx.get("vol_ratio_15m", 0.0)
+    #vol_dir = ctx.get("vol_dir_15m", 0.0)
+
+    vol_ratio = ctx.get("vol_ratio_5m", 0.0)
+    vol_dir   = ctx.get("vol_dir_5m", 0.0)
+    rsi_5     = ctx.get("rsi_5m", 50.0)
 
     if vol_ratio < 1.8:
         return False, []
@@ -135,6 +139,18 @@ def should_alert(
     else:
         return False, []
 
+    # =========================
+    # 3.1 RSI TIMING (15m)
+    # =========================
+
+    rsi_5 = ctx.get("rsi_5m", 50.0)
+
+    if side == "LONG" and 45 <= rsi_5 <= 60:
+        reasons.append(f"RSI(5m)={rsi_5:.1f} pullback timing")
+    elif side == "SHORT" and 40 <= rsi_5 <= 55:
+        reasons.append(f"RSI(5m)={rsi_5:.1f} rally timing")
+    else:
+        return False, []
     # =========================
     # 4. MACD CLAMP
     # =========================
