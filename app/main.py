@@ -25,10 +25,23 @@ from .modeling import load_models, predict
 from .mysql_writer import MySQLWriter, MySQLConfig
 from .utils import logret, rolling_std, backoff_s
 from .alert_engine import ctx_filters_signal
+
+#bo sung 10-01-2026 ->
 from indicators import VolumeSMA, DirectionalVolume
 
 vol_sma_15m = VolumeSMA(period=20)
 vol_dir_15m = DirectionalVolume()
+vol = candle.volume
+close = candle.close
+
+vol_sma = vol_sma_15m.update(vol)
+vol_dir = vol_dir_15m.update(close, vol)
+
+ctx["vol_15m"] = vol
+ctx["vol_sma_15m"] = vol_sma
+ctx["vol_ratio_15m"] = vol / max(vol_sma, 1e-9)
+ctx["vol_dir_15m"] = vol_dir
+#<-
 
 HORIZON_SEC = 120
 
@@ -412,5 +425,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
