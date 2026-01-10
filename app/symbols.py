@@ -42,9 +42,9 @@ FALLBACK_SYMBOLS = [
     # ==================================================
     # EXTREME (chỉ bật khi muốn stress test)
     # ==================================================
-    "1000SHIBUSDT",
-    "1000FLOKIUSDT",
-    "1000BONKUSDT",
+    "SHIBUSDT",
+    "FLOKIUSDT",
+    "BONKUSDT",
 
      # ==================================================
     # SUNG BO SUNG
