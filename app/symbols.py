@@ -3,14 +3,50 @@ from typing import List
 
 # fallback danh sách USDT thanh khoản cao (futures)
 FALLBACK_SYMBOLS = [
-    "BTCUSDT", "ETHUSDT", "BNBUSDT",
-    "SOLUSDT", "XRPUSDT", "DOGEUSDT",
-    "ADAUSDT", "AVAXUSDT", "LINKUSDT",
-    "MATICUSDT", "ARBUSDT", "OPUSDT",
-    "LTCUSDT", "BCHUSDT", "ATOMUSDT",
-    "NEARUSDT", "FILUSDT", "APTUSDT",
-    "SUIUSDT", "TRXUSDT",
+    # ==================================================
+    # CORE (anchor – luôn nên giữ)
+    # ==================================================
+    "BTCUSDT", "ETHUSDT",
+
+    # ==================================================
+    # STRONG MID-CAP – RẤT HỢP TREND + VOLUME
+    # ==================================================
+    "SOLUSDT", "AVAXUSDT", "LINKUSDT",
+    "INJUSDT", "SEIUSDT", "TIAUSDT",
+    "RNDRUSDT", "APTUSDT", "SUIUSDT",
+
+    # ==================================================
+    # L2 / INFRA – hay breakout
+    # ==================================================
+    "ARBUSDT", "OPUSDT", "IMXUSDT",
+    "BLURUSDT", "MANTAUSDT", "STRKUSDT",
+
+    # ==================================================
+    # HIGH BETA / FAST MOVER (test volume spike)
+    # ==================================================
+    "WIFUSDT", "PEPEUSDT", "FLOKIUSDT",
+    "BONKUSDT", "DOGEUSDT",
+
+    # ==================================================
+    # SMALL BUT VERY VOLATILE (FUTURES LIQUID)
+    # ==================================================
+    "ORDIUSDT", "JUPUSDT", "PYTHUSDT",
+    "AEVOUSDT", "DYDXUSDT", "ENAUSDT",
+
+    # ==================================================
+    # OLD COINS – vẫn pump mạnh khi có tin
+    # ==================================================
+    "ETCUSDT", "LTCUSDT", "BCHUSDT",
+    "NEARUSDT", "ATOMUSDT",
+
+    # ==================================================
+    # EXTREME (chỉ bật khi muốn stress test)
+    # ==================================================
+    "1000SHIBUSDT",
+    "1000FLOKIUSDT",
+    "1000BONKUSDT",
 ]
+
 
 async def get_top_usdt_symbols(rest_base: str, top_n: int) -> List[str]:
     url = f"{rest_base}/fapi/v1/ticker/24hr"
