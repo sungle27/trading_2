@@ -222,7 +222,7 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str, mysql: MySQLWrit
     use_ml = (models.reg is not None) or (models.clf is not None)
     print("Using ML models:", use_ml)
 
-    await send_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "TEST MESSAGE OK, version 1 [l.l.sung_9:53:07-01-2026]")
+    await send_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "TEST MESSAGE OK, version 1 [l.l.sung_10-01-2026 v1]")
 
     while True:
         try:
@@ -425,6 +425,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
