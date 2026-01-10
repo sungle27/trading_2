@@ -1,32 +1,5 @@
-from typing import Dict, Tuple
-import time
+from typing import Dict
 
-def get_rsi(ctx: Dict[str, float], tf: str) -> float:
-    return ctx.get(f"rsi_{tf}", ctx.get("rsi_5m", 50.0))
-
-def get_macd_hist(ctx: Dict[str, float], tf: str) -> float:
-    return ctx.get(f"macd_hist_{tf}", ctx.get("macd_hist_15m", 0.0))
-
-def ctx_filters_signal(ctx: Dict[str, float], side: str) -> bool:
-    rsi5 = ctx["rsi_5m"]
-    rsi15 = ctx["rsi_15m"]
-    ema20_15 = ctx["ema20_15m"]
-    ema50_15 = ctx["ema50_15m"]
-    macd15 = ctx["macd_hist_15m"]
-    ema_ready = (ema20_15 != 0.0 and ema50_15 != 0.0)
-
-    if side == "LONG":
-        if rsi5 < 50: return False
-        if rsi15 < 45: return False
-        if ema_ready and not (ema20_15 > ema50_15): return False
-        if macd15 < 0: return False
-        return True
-    else:
-        if rsi5 > 50: return False
-        if rsi15 > 55: return False
-        if ema_ready and not (ema20_15 < ema50_15): return False
-        if macd15 > 0: return False
-        return True
 
 def should_alert(
     side: str,               # "LONG" | "SHORT"
@@ -39,11 +12,11 @@ def should_alert(
     spread_max: float,
 ):
     """
-    Return True nếu được phép alert, False nếu bị chặn
+    Return True nếu được phép alert
     """
 
     # =========================
-    # 0. Cooldown & spread
+    # 0. Cooldown & Spread
     # =========================
     if now_s - last_alert_sec < cooldown_sec:
         return False
@@ -54,61 +27,69 @@ def should_alert(
     # =========================
     # 1. REGIME FILTER (15m)
     # =========================
-    ema20_15 = ctx["ema20_15m"]
-    ema50_15 = ctx["ema50_15m"]
+    ema20_15 = ctx.get("ema20_15m", 0.0)
+    ema50_15 = ctx.get("ema50_15m", 0.0)
 
     if ema20_15 == 0 or ema50_15 == 0:
         return False
 
-    # sideway nếu EMA quá sát nhau
     if abs(ema20_15 - ema50_15) / mid < 0.001:
+        return False
+
+    # =========================
+    # 1.5 VOLUME SPIKE FILTER (NEW)
+    # =========================
+    vol_ratio = ctx.get("vol_ratio_15m", 0.0)
+    vol_dir = ctx.get("vol_dir_15m", 0.0)
+
+    if vol_ratio < 1.8:
+        return False
+
+    if side == "LONG" and vol_dir <= 0:
+        return False
+
+    if side == "SHORT" and vol_dir >= 0:
         return False
 
     # =========================
     # 2. HTF TREND FILTER (1h)
     # =========================
-    ema200_1h = ctx.get("ema50_1h")  # nếu có EMA200_1h thì thay ở đây
+    ema_htf = ctx.get("ema50_1h", 0.0)
 
-    if ema200_1h == 0:
+    if ema_htf == 0:
         return False
 
-    if side == "LONG" and mid <= ema200_1h:
+    if side == "LONG" and mid <= ema_htf:
         return False
 
-    if side == "SHORT" and mid >= ema200_1h:
+    if side == "SHORT" and mid >= ema_htf:
         return False
 
     # =========================
     # 3. RSI TIMING (15m)
     # =========================
-    rsi_15 = ctx["rsi_15m"]
+    rsi_15 = ctx.get("rsi_15m", 50.0)
 
     if side == "LONG":
-        # buy dip trong uptrend
         if not (45 <= rsi_15 <= 55):
             return False
 
     if side == "SHORT":
-        # sell rally trong downtrend
         if not (50 <= rsi_15 <= 60):
             return False
 
     # =========================
     # 4. MACD STRENGTH (15m)
     # =========================
-    macd_hist = ctx["macd_hist_15m"]
+    macd_hist = ctx.get("macd_hist_15m", 0.0)
 
-    if side == "LONG":
-        # lực tăng, không quá âm
-        if macd_hist < -0.0001:
-            return False
+    if side == "LONG" and macd_hist < -0.0001:
+        return False
 
-    if side == "SHORT":
-        # lực giảm, không quá dương
-        if macd_hist > 0.0001:
-            return False
+    if side == "SHORT" and macd_hist > 0.0001:
+        return False
 
     # =========================
-    # OK – ĐỦ ĐIỀU KIỆN ALERT
+    # OK – ALERT
     # =========================
     return True
