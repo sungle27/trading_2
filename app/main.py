@@ -18,30 +18,26 @@ from .alert_engine import ctx_filters_signal, should_alert
 from .utils import backoff_s
 
 
-# ============================================================
-# SYMBOL STATE
-# ============================================================
 class SymbolState:
     def __init__(self):
         self.bid = self.ask = None
         self.cur_sec = None
-        self.volume = 0.0
 
-        # === Resamplers ===
+        self.vol_5m_acc = 0.0
+        self.vol_15m_acc = 0.0
+        self.h_counter = 0
+
         self.r5m = TimeframeResampler(5 * 60)
         self.r15m = TimeframeResampler(15 * 60)
 
-        # === Indicators ===
         self.rsi_5m = RSI()
         self.rsi_15m = RSI()
 
         self.ema20_15m = EMA(20)
         self.ema50_15m = EMA(50)
         self.macd_15m = MACD()
-        
         self.ema50_1h = EMA(50)
 
-        # === Volume spike (5m) ===
         self.vol_sma_5m = VolumeSMA(20)
         self.vol_dir_5m = DirectionalVolume()
         self.vol_ratio_5m = 0.0
@@ -61,9 +57,6 @@ class SymbolState:
         return (self.ask - self.bid) / m
 
 
-# ============================================================
-# STREAMS
-# ============================================================
 async def ws_bookticker(states: Dict[str, SymbolState], url: str):
     while True:
         try:
@@ -83,7 +76,7 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
     await send_telegram(
         TELEGRAM_BOT_TOKEN,
         TELEGRAM_CHAT_ID,
-         f"✅ Bot started LLSUNG_VERSION_10-01-2026_V1"
+        "✅ Bot started – ALERT ENGINE ACTIVE"
     )
 
     while True:
@@ -107,8 +100,8 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
                         while sec > st.cur_sec:
                             mid = st.mid()
                             if mid:
-                                # ===== 5m trigger =====
-                                closed5, did5 = st.r5m.update(st.cur_sec, mid, st.volume)
+                                # ===== 5m =====
+                                closed5, did5 = st.r5m.update(st.cur_sec, mid, st.vol_5m_acc)
                                 if did5 and closed5:
                                     st.rsi_5m.update(closed5.close)
 
@@ -116,15 +109,6 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
                                     sma = st.vol_sma_5m.update(vol)
                                     st.vol_ratio_5m = vol / max(sma, 1e-9)
                                     st.vol_dir_5m_val = st.vol_dir_5m.update(closed5.close, vol)
-
-                                # ===== 15m trend =====
-                                closed15, did15 = st.r15m.update(st.cur_sec, mid, st.volume)
-                                if did15 and closed15:
-                                    st.rsi_15m.update(closed15.close)
-                                    st.ema20_15m.update(closed15.close)
-                                    st.ema50_15m.update(closed15.close)
-                                    st.macd_15m.update(closed15.close)
-                                    st.ema50_1h.update(closed15.close)
 
                                     ctx = {
                                         "rsi_5m": st.rsi_5m.value,
@@ -151,37 +135,42 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
                                             cooldown_sec=COOLDOWN_SEC,
                                             spread_max=SPREAD_MAX,
                                         )
-
                                         if ok:
                                             st.last_alert_sec = now_s
-                                            reason_txt = "\n".join(f"- {r}" for r in reasons)
-
                                             msg = (
                                                 f"🚨 STRONG LONG SIGNAL {sym}\n"
                                                 f"Price: {mid:.6f}\n\n"
-                                                f"📌 Reasons:\n{reason_txt}"
+                                                + "\n".join(f"- {r}" for r in reasons)
+                                            )
+                                            asyncio.create_task(
+                                                send_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, msg)
                                             )
 
-                                            asyncio.create_task(
-                                                send_telegram(
-                                                    TELEGRAM_BOT_TOKEN,
-                                                    TELEGRAM_CHAT_ID,
-                                                    msg,
-                                                )
-                                            )
+                                    st.vol_5m_acc = 0.0
+
+                                # ===== 15m =====
+                                closed15, did15 = st.r15m.update(st.cur_sec, mid, st.vol_15m_acc)
+                                if did15 and closed15:
+                                    st.rsi_15m.update(closed15.close)
+                                    st.ema20_15m.update(closed15.close)
+                                    st.ema50_15m.update(closed15.close)
+                                    st.macd_15m.update(closed15.close)
+
+                                    st.h_counter += 1
+                                    if st.h_counter % 4 == 0:
+                                        st.ema50_1h.update(closed15.close)
+
+                                    st.vol_15m_acc = 0.0
 
                             st.cur_sec += 1
-                            st.volume = 0.0
 
-                        st.volume += qty
+                        st.vol_5m_acc += qty
+                        st.vol_15m_acc += qty
 
         except Exception:
             await asyncio.sleep(backoff_s(1))
 
 
-# ============================================================
-# MAIN
-# ============================================================
 async def main():
     symbols = await get_top_usdt_symbols(BINANCE_FUTURES_REST, TOP_N)
     states = {s: SymbolState() for s in symbols}
