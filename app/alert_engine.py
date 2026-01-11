@@ -11,8 +11,8 @@ TEST_MODE = "BOTH"
 #   "SHORT" → ép SHORT
 #   "BOTH"  → LUÂN PHIÊN LONG / SHORT (để test)
 
-VOL_RATIO_MIN = 1.1        # test: 1.1 | prod: 1.4+
-EMA_GAP_MIN = 0.0003       # test nới trend
+VOL_RATIO_MIN = 1.4        # test: 1.1 | prod: 1.4+
+EMA_GAP_MIN = 0.0015       # test nới trend
 
 
 # ============================================================
@@ -125,14 +125,14 @@ def should_alert(
     rsi15 = ctx.get("rsi_15m", 50.0)
 
     if side == "LONG":
-        if not (30 <= rsi5 <= 90):
+        if not (40 <= rsi5 <= 70):
             return False, ["RSI5 extreme"]
-        if not (30 <= rsi15 <= 80):
+        if not (45 <= rsi15 <= 65):
             return False, ["RSI15 extreme"]
     else:
-        if not (10 <= rsi5 <= 70):
+        if not (30 <= rsi5 <= 60):
             return False, ["RSI5 extreme"]
-        if not (20 <= rsi15 <= 65):
+        if not (35 <= rsi15 <= 55):
             return False, ["RSI15 extreme"]
 
     reasons.append(f"RSI OK (5m={rsi5:.1f}, 15m={rsi15:.1f})")
@@ -142,9 +142,9 @@ def should_alert(
     # ========================================================
     macd = ctx.get("macd_hist_15m", 0.0)
 
-    if side == "LONG" and macd < -0.003:
+    if side == "LONG" and macd < -0.0005:
         return False, ["MACD too negative"]
-    if side == "SHORT" and macd > 0.003:
+    if side == "SHORT" and macd > 0.0005:
         return False, ["MACD too positive"]
 
     reasons.append(f"MACD OK ({macd:.5f})")
