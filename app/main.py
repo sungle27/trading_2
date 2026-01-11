@@ -137,8 +137,8 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
     await send_telegram(
         TELEGRAM_BOT_TOKEN,
         TELEGRAM_CHAT_ID,
-        "🚀 Bot started | TEST_MODE = {TEST_MODE}",
-    )
+        f"Bot started | TEST_MODE = {TEST_MODE}"
+)
 
     attempt = 0
     while True:
