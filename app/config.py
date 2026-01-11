@@ -6,7 +6,7 @@ load_dotenv()
 BINANCE_FUTURES_REST = os.getenv("BINANCE_FUTURES_REST", "https://fapi.binance.com")
 BINANCE_FUTURES_WS = os.getenv("BINANCE_FUTURES_WS", "wss://fstream.binance.com/stream")
 TOP_N = int(os.getenv("TOP_N", "40"))
-
+TEST_MODE = os.getenv("TEST_MODE", "OFF").upper()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
