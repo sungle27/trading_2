@@ -101,7 +101,8 @@ def should_alert(
     vol_dir = ctx.get("vol_dir_5m", 0.0)
 
     if vol_ratio < 1.1:
-        return False, []
+        return False, [f"FAIL vol_ratio={vol_ratio:.2f}"]
+        #return False, []
 
     reasons.append(f"Volume spike {vol_ratio:.2f}x")
 

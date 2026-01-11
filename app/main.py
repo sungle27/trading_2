@@ -181,7 +181,9 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
                                                     msg,
                                                 )
                                             )
-
+                                        ok, reasons = should_alert(...)
+                                        if not ok:
+                                            print(">>> ALERT FAIL REASON:", reasons)
                             st.cur_sec += 1
                             st.volume = 0.0
 
