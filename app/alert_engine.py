@@ -11,7 +11,7 @@ TEST_MODE = "BOTH"
 #   "SHORT" → ép SHORT
 #   "BOTH"  → LUÂN PHIÊN LONG / SHORT (để test)
 
-VOL_RATIO_MIN = 1.4        # test: 1.1 | prod: 1.4+
+VOL_RATIO_MIN = 1.8        # test: 1.1 | prod: 1.4+
 EMA_GAP_MIN = 0.0015       # test nới trend
 
 
