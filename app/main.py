@@ -17,6 +17,7 @@ from .config import (
     SPREAD_MAX,
 )
 
+
 from .symbols import get_top_usdt_symbols
 from .telegram import send_telegram
 from .resample import TimeframeResampler
@@ -24,7 +25,7 @@ from .indicators import RSI, EMA, MACD, VolumeSMA, DirectionalVolume
 from .alert_engine import ctx_filters_signal, should_alert
 from .utils import backoff_s
 
-
+from .symbols import FALLBACK_SYMBOLS
 # ============================================================
 # BASIC LOGGER
 # ============================================================
@@ -277,7 +278,8 @@ def build_url(symbols, suffix):
 
 async def main():
     log("main start")
-    symbols = await get_top_usdt_symbols(BINANCE_FUTURES_REST, TOP_N)
+    # symbols = await get_top_usdt_symbols(BINANCE_FUTURES_REST, TOP_N)
+    symbols = FALLBACK_SYMBOLS
     log(f"Tracking {len(symbols)} symbols")
 
     states = {s: SymbolState() for s in symbols}
