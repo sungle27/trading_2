@@ -112,6 +112,8 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
                             if mid:
                                 # ===== 5m trigger =====
                                 closed5, did5 = st.r5m.update(st.cur_sec, mid, st.volume)
+                                if did5:
+                                    print(f">>> 5M CLOSED {sym} close={closed5.close if closed5 else None}")
                                 if did5 and closed5:
                                     st.rsi_5m.update(closed5.close)
 
@@ -142,7 +144,14 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
 
                                     now_s = int(time.time())
                                     spread = st.spread()
-
+                                    print(
+                                        f">>> CTX {sym}",
+                                        f"rsi5={ctx.get('rsi_5m')}",
+                                        f"rsi15={ctx.get('rsi_15m')}",
+                                        f"vol_ratio={ctx.get('vol_ratio_5m')}",
+                                        f"ema20={ctx.get('ema20_15m')}",
+                                        f"ema50={ctx.get('ema50_15m')}",
+                                    )
                                     if ctx_filters_signal(ctx, "LONG"):
                                         ok, reasons = should_alert(
                                             side="LONG",
