@@ -26,6 +26,10 @@ from .alert_engine import ctx_filters_signal, should_alert
 from .utils import backoff_s
 
 from .symbols import FALLBACK_SYMBOLS
+from .config import TEST_MODE
+
+print(f">>> ALERT ENGINE MODE = {TEST_MODE}")
+
 # ============================================================
 # BASIC LOGGER
 # ============================================================
@@ -133,7 +137,7 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
     await send_telegram(
         TELEGRAM_BOT_TOKEN,
         TELEGRAM_CHAT_ID,
-        "✅ Crypto Alert Bot started (5m trigger · 15m trend · explainable)",
+        "🚀 Bot started | TEST_MODE = {TEST_MODE}",
     )
 
     attempt = 0

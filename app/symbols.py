@@ -90,6 +90,6 @@ async def get_top_usdt_symbols(rest_base: str, top_n: int) -> List[str]:
 
     except Exception as e:
         # FALLBACK MODE
-        fallback = FALLBACK_SYMBOLS[:top_n]
+        fallback = FALLBACK_SYMBOLS[:FALLBACK_SYMBOLS]
         print(f"[symbols] REST failed ({e}), fallback to {len(fallback)} hardcoded symbols")
         return fallback
