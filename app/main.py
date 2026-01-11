@@ -146,6 +146,7 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
 
                         payload = json.loads(msg.data)
                         data = payload.get("data", {})
+
                         sym = data.get("s")
                         if sym not in states:
                             continue
@@ -173,18 +174,18 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
                                     st.vol_dir_5m_val = st.vol_dir_5m.update(closed5.close, vol)
 
                                     # Telegram 5m log
-                                    await send_cycle_log(
-                                        sym,
-                                        "5m",
-                                        (
-                                            f"🕔 5M CLOSE {sym}\n"
-                                            f"Price: {closed5.close:.6f}\n"
-                                            f"Volume: {vol:.4f}\n"
-                                            f"Vol ratio: {st.vol_ratio_5m:.2f}x\n"
-                                            f"Vol dir: {st.vol_dir_5m_val:+.2f}\n"
-                                            f"RSI(5m): {st.rsi_5m.value:.1f}"
-                                        ),
-                                    )
+                                    # await send_cycle_log(
+                                    #     sym,
+                                    #     "5m",
+                                    #     (
+                                    #         f"🕔 5M CLOSE {sym}\n"
+                                    #         f"Price: {closed5.close:.6f}\n"
+                                    #         f"Volume: {vol:.4f}\n"
+                                    #         f"Vol ratio: {st.vol_ratio_5m:.2f}x\n"
+                                    #         f"Vol dir: {st.vol_dir_5m_val:+.2f}\n"
+                                    #         f"RSI(5m): {st.rsi_5m.value:.1f}"
+                                    #     ),
+                                    # )
 
                                 # ===== 15M =====
                                 closed15, did15 = st.r15m.update(st.cur_sec, mid, st.volume)
@@ -195,17 +196,17 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
                                     st.macd_15m.update(closed15.close)
                                     st.ema50_1h.update(closed15.close)
 
-                                    await send_cycle_log(
-                                        sym,
-                                        "15m",
-                                        (
-                                            f"🕒 15M CLOSE {sym}\n"
-                                            f"Price: {closed15.close:.6f}\n"
-                                            f"RSI(15m): {st.rsi_15m.value:.1f}\n"
-                                            f"EMA20/50: {st.ema20_15m.value:.6f} / {st.ema50_15m.value:.6f}\n"
-                                            f"MACD hist: {st.macd_15m.hist:.6f}"
-                                        ),
-                                    )
+                                    # await send_cycle_log(
+                                    #     sym,
+                                    #     "15m",
+                                    #     (
+                                    #         f"🕒 15M CLOSE {sym}\n"
+                                    #         f"Price: {closed15.close:.6f}\n"
+                                    #         f"RSI(15m): {st.rsi_15m.value:.1f}\n"
+                                    #         f"EMA20/50: {st.ema20_15m.value:.6f} / {st.ema50_15m.value:.6f}\n"
+                                    #         f"MACD hist: {st.macd_15m.hist:.6f}"
+                                    #     ),
+                                    # )
 
                                 # ===== ALERT CHECK (ON 5M CLOSE) =====
                                 if did5 and closed5:
