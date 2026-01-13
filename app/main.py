@@ -14,7 +14,6 @@ from .config import (
 
 from .symbols import FALLBACK_SYMBOLS
 from .telegram import send_telegram
-from .resample import TimeframeResampler
 from .indicators import RSI, EMA, MACD, VolumeSMA, DirectionalVolume
 from .alert_engine import ctx_filters_signal, should_alert
 from .utils import backoff_s
@@ -28,18 +27,18 @@ class SymbolState:
         # ---- market data ----
         self.bid = None
         self.ask = None
-        self.cur_sec = None
 
-        # ---- volume accumulators ----
+        # ---- bucket trackers ----
+        self.last_5m_bucket = None
+        self.last_15m_bucket = None
+
+        # ---- running closes for bucket (proxy candle close) ----
+        self.close_5m = None
+        self.close_15m = None
+
+        # ---- volume accumulators per bucket ----
         self.vol_5m_acc = 0.0
         self.vol_15m_acc = 0.0
-
-        # ---- timeframe counters ----
-        self.h_counter = 0
-
-        # ---- resamplers ----
-        self.r5m = TimeframeResampler(5 * 60)
-        self.r15m = TimeframeResampler(15 * 60)
 
         # ---- indicators ----
         self.rsi_5m = RSI()
@@ -49,9 +48,11 @@ class SymbolState:
         self.ema50_15m = EMA(50)
         self.macd_15m = MACD()
 
+        # NOTE: bạn đang dùng EMA50_1h như HTF filter
+        # Ở đây update theo 15m close (mỗi 15m), đủ dùng cho alert bot
         self.ema50_1h = EMA(50)
 
-        # ---- volume logic ----
+        # ---- volume features (5m) ----
         self.vol_sma_5m = VolumeSMA(20)
         self.vol_dir_5m = DirectionalVolume()
         self.vol_ratio_5m = 0.0
@@ -91,7 +92,6 @@ async def ws_bookticker(states: Dict[str, SymbolState], url: str):
 
 
 async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
-    # ---- startup heartbeat ----
     await send_telegram(
         TELEGRAM_BOT_TOKEN,
         TELEGRAM_CHAT_ID,
@@ -107,72 +107,114 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
                         sym = data.get("s")
                         if sym not in states:
                             continue
-                        
-                       
+
                         st = states[sym]
-                        sec = data["T"] // 1000
                         qty = float(data["q"])
 
-                        if st.cur_sec is None:
-                            st.cur_sec = int(time.time())
+                        mid = st.mid()
+                        if mid is None:
+                            continue
+
+                        now = int(time.time())
 
                         # ====================================================
-                        # HANDLE SECOND ADVANCE
+                        # 5M BUCKET (TRIGGER)
                         # ====================================================
-                        now_sec = int(time.time())
+                        bucket_5m = now // 300  # 300s = 5 minutes
+                        if st.last_5m_bucket is None:
+                            st.last_5m_bucket = bucket_5m
 
-                        if now_sec > st.cur_sec:
-                            mid = st.mid()
-                            if mid:
-                                closed5, did5 = st.r5m.update(st.cur_sec, mid, st.vol_5m_acc)
-                                # DEBUG 1: confirm update() is called
-                                if st.cur_sec % 60 == 0:  # mỗi phút log 1 lần
-                                    asyncio.create_task(
-                                        send_telegram(
-                                            TELEGRAM_BOT_TOKEN,
-                                            TELEGRAM_CHAT_ID,
-                                            f"🧪 DEBUG update() called {sym} cur_sec={st.cur_sec}"
-                                        )
+                        # bucket changed => close previous 5m "candle"
+                        if bucket_5m != st.last_5m_bucket:
+                            # Heartbeat: xác nhận chắc chắn 5m cycle đã đóng
+                            asyncio.create_task(
+                                send_telegram(
+                                    TELEGRAM_BOT_TOKEN,
+                                    TELEGRAM_CHAT_ID,
+                                    f"⏱️ 5M CLOSED {sym} | vol={st.vol_5m_acc:.2f}"
+                                )
+                            )
+
+                            if st.close_5m is not None:
+                                # ---- update 5m RSI ----
+                                st.rsi_5m.update(st.close_5m)
+
+                                # ---- volume features ----
+                                vol = st.vol_5m_acc
+                                sma = st.vol_sma_5m.update(vol)
+                                st.vol_ratio_5m = vol / max(sma, 1e-9)
+                                st.vol_dir_5m_val = st.vol_dir_5m.update(st.close_5m, vol)
+
+                                # ---- build ctx ----
+                                ctx = {
+                                    "rsi_5m": st.rsi_5m.value,
+                                    "rsi_15m": st.rsi_15m.value,
+                                    "ema20_15m": st.ema20_15m.value,
+                                    "ema50_15m": st.ema50_15m.value,
+                                    "ema50_1h": st.ema50_1h.value,
+                                    "macd_hist_15m": st.macd_15m.hist,
+                                    "vol_ratio_5m": st.vol_ratio_5m,
+                                    "vol_dir_5m": st.vol_dir_5m_val,
+                                }
+
+                                now_s = now
+                                spread = st.spread()
+
+                                # ---- LONG (giữ đúng cấu trúc cũ) ----
+                                if ctx_filters_signal(ctx, "LONG"):
+                                    ok, reasons = should_alert(
+                                        side="LONG",
+                                        mid=st.close_5m,          # dùng close của bucket 5m
+                                        spread=spread,
+                                        ctx=ctx,
+                                        now_s=now_s,
+                                        last_alert_sec=st.last_alert_sec,
+                                        cooldown_sec=COOLDOWN_SEC,
+                                        spread_max=SPREAD_MAX,
                                     )
-                                    # DEBUG 2: log did5
-                                if st.cur_sec % 60 == 0:
-                                    asyncio.create_task(
-                                        send_telegram(
-                                            TELEGRAM_BOT_TOKEN,
-                                            TELEGRAM_CHAT_ID,
-                                            f"🧪 DEBUG did5={did5} {sym}"
+                                    if ok:
+                                        st.last_alert_sec = now_s
+                                        msg = (
+                                            f"🚨 LONG SIGNAL {sym}\n"
+                                            f"Price: {st.close_5m:.6f}\n\n"
+                                            "📌 Reasons:\n" + "\n".join(f"- {r}" for r in reasons)
                                         )
-                                    )
-
-                                if did5:
-                                    asyncio.create_task(
-                                        send_telegram(
-                                            TELEGRAM_BOT_TOKEN,
-                                            TELEGRAM_CHAT_ID,
-                                            f"🔥 DEBUG did5=True {sym}"
+                                        asyncio.create_task(
+                                            send_telegram(
+                                                TELEGRAM_BOT_TOKEN,
+                                                TELEGRAM_CHAT_ID,
+                                                msg,
+                                            )
                                         )
-                                    )
-                                if did5 and closed5:
-                                    # === DEBUG CONFIRM ===
-                                    asyncio.create_task(
-                                        send_telegram(
-                                            TELEGRAM_BOT_TOKEN,
-                                            TELEGRAM_CHAT_ID,
-                                            f"⏱️ 5M CLOSED {sym} | vol_ratio={st.vol_ratio_5m:.2f}"
-                                        )
-                                    )
 
-                                    # (giữ nguyên logic alert ở đây)
+                            # reset for new 5m bucket
+                            st.last_5m_bucket = bucket_5m
+                            st.vol_5m_acc = 0.0
 
-                                    st.vol_5m_acc = 0.0
+                        # update running close for current 5m bucket
+                        st.close_5m = mid
 
-                                closed15, did15 = st.r15m.update(st.cur_sec, mid, st.vol_15m_acc)
-                                if did15 and closed15:
-                                    # giữ nguyên logic 15m
-                                    st.vol_15m_acc = 0.0
+                        # ====================================================
+                        # 15M BUCKET (CONTEXT)
+                        # ====================================================
+                        bucket_15m = now // 900  # 900s = 15 minutes
+                        if st.last_15m_bucket is None:
+                            st.last_15m_bucket = bucket_15m
 
-                            st.cur_sec = now_sec
+                        if bucket_15m != st.last_15m_bucket:
+                            if st.close_15m is not None:
+                                st.rsi_15m.update(st.close_15m)
+                                st.ema20_15m.update(st.close_15m)
+                                st.ema50_15m.update(st.close_15m)
+                                st.macd_15m.update(st.close_15m)
 
+                                # HTF proxy: update EMA50_1h theo 15m close
+                                st.ema50_1h.update(st.close_15m)
+
+                            st.last_15m_bucket = bucket_15m
+                            st.vol_15m_acc = 0.0
+
+                        st.close_15m = mid
 
                         # ====================================================
                         # ACCUMULATE VOLUME
