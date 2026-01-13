@@ -107,7 +107,14 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
                         sym = data.get("s")
                         if sym not in states:
                             continue
-
+                        
+                        asyncio.create_task(
+                        send_telegram(
+                            TELEGRAM_BOT_TOKEN,
+                            TELEGRAM_CHAT_ID,
+                            f"📥 trade tick {sym}"
+                        )
+                    )
                         st = states[sym]
                         sec = data["T"] // 1000
                         qty = float(data["q"])
