@@ -126,15 +126,6 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
 
                         # bucket changed => close previous 5m "candle"
                         if bucket_5m != st.last_5m_bucket:
-                            # Heartbeat: xác nhận chắc chắn 5m cycle đã đóng
-                            asyncio.create_task(
-                                send_telegram(
-                                    TELEGRAM_BOT_TOKEN,
-                                    TELEGRAM_CHAT_ID,
-                                    f"⏱️ 5M CLOSED {sym} | vol={st.vol_5m_acc:.2f}"
-                                )
-                            )
-
                             if st.close_5m is not None:
                                 # ---- update 5m RSI ----
                                 st.rsi_5m.update(st.close_5m)
@@ -176,6 +167,33 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
                                         st.last_alert_sec = now_s
                                         msg = (
                                             f"🚨 LONG SIGNAL {sym}\n"
+                                            f"Price: {st.close_5m:.6f}\n\n"
+                                            "📌 Reasons:\n" + "\n".join(f"- {r}" for r in reasons)
+                                        )
+                                        asyncio.create_task(
+                                            send_telegram(
+                                                TELEGRAM_BOT_TOKEN,
+                                                TELEGRAM_CHAT_ID,
+                                                msg,
+                                            )
+                                        )
+
+                                # ---- SHORT SIGNAL ----
+                                if ctx_filters_signal(ctx, "SHORT"):
+                                    ok, reasons = should_alert(
+                                        side="SHORT",
+                                        mid=st.close_5m,
+                                        spread=spread,
+                                        ctx=ctx,
+                                        now_s=now_s,
+                                        last_alert_sec=st.last_alert_sec,
+                                        cooldown_sec=COOLDOWN_SEC,
+                                        spread_max=SPREAD_MAX,
+                                    )
+                                    if ok:
+                                        st.last_alert_sec = now_s
+                                        msg = (
+                                            f"🚨 SHORT SIGNAL {sym}\n"
                                             f"Price: {st.close_5m:.6f}\n\n"
                                             "📌 Reasons:\n" + "\n".join(f"- {r}" for r in reasons)
                                         )
