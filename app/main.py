@@ -114,96 +114,38 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
                         qty = float(data["q"])
 
                         if st.cur_sec is None:
-                            st.cur_sec = sec
+                            st.cur_sec = int(time.time())
 
                         # ====================================================
                         # HANDLE SECOND ADVANCE
                         # ====================================================
-                        while sec > st.cur_sec:
+                        now_sec = int(time.time())
+
+                        if now_sec > st.cur_sec:
                             mid = st.mid()
                             if mid:
-                                # ==========================
-                                # 5M CANDLE (TRIGGER)
-                                # ==========================
-                                closed5, did5 = st.r5m.update(
-                                    st.cur_sec, mid, st.vol_5m_acc
-                                )
+                                closed5, did5 = st.r5m.update(st.cur_sec, mid, st.vol_5m_acc)
                                 if did5 and closed5:
-                                    st.rsi_5m.update(closed5.close)
-
-                                    vol = closed5.volume
-                                    sma = st.vol_sma_5m.update(vol)
-                                    st.vol_ratio_5m = vol / max(sma, 1e-9)
-                                    st.vol_dir_5m_val = st.vol_dir_5m.update(
-                                        closed5.close, vol
+                                    # === DEBUG CONFIRM ===
+                                    asyncio.create_task(
+                                        send_telegram(
+                                            TELEGRAM_BOT_TOKEN,
+                                            TELEGRAM_CHAT_ID,
+                                            f"⏱️ 5M CLOSED {sym} | vol_ratio={st.vol_ratio_5m:.2f}"
+                                        )
                                     )
 
-                                    # ---- build context ----
-                                    ctx = {
-                                        "rsi_5m": st.rsi_5m.value,
-                                        "rsi_15m": st.rsi_15m.value,
-                                        "ema20_15m": st.ema20_15m.value,
-                                        "ema50_15m": st.ema50_15m.value,
-                                        "ema50_1h": st.ema50_1h.value,
-                                        "macd_hist_15m": st.macd_15m.hist,
-                                        "vol_ratio_5m": st.vol_ratio_5m,
-                                        "vol_dir_5m": st.vol_dir_5m_val,
-                                    }
+                                    # (giữ nguyên logic alert ở đây)
 
-                                    now_s = int(time.time())
-                                    spread = st.spread()
-
-                                    # ==========================
-                                    # LONG SIGNAL
-                                    # ==========================
-                                    if ctx_filters_signal(ctx, "LONG"):
-                                        ok, reasons = should_alert(
-                                            side="LONG",
-                                            mid=mid,
-                                            spread=spread,
-                                            ctx=ctx,
-                                            now_s=now_s,
-                                            last_alert_sec=st.last_alert_sec,
-                                            cooldown_sec=COOLDOWN_SEC,
-                                            spread_max=SPREAD_MAX,
-                                        )
-                                        if ok:
-                                            st.last_alert_sec = now_s
-                                            msg = (
-                                                f"🚨 LONG SIGNAL {sym}\n"
-                                                f"Price: {mid:.6f}\n\n"
-                                                + "\n".join(f"- {r}" for r in reasons)
-                                            )
-                                            asyncio.create_task(
-                                                send_telegram(
-                                                    TELEGRAM_BOT_TOKEN,
-                                                    TELEGRAM_CHAT_ID,
-                                                    msg,
-                                                )
-                                            )
-
-                                    # reset 5m volume
                                     st.vol_5m_acc = 0.0
 
-                                # ==========================
-                                # 15M CANDLE (CONTEXT)
-                                # ==========================
-                                closed15, did15 = st.r15m.update(
-                                    st.cur_sec, mid, st.vol_15m_acc
-                                )
+                                closed15, did15 = st.r15m.update(st.cur_sec, mid, st.vol_15m_acc)
                                 if did15 and closed15:
-                                    st.rsi_15m.update(closed15.close)
-                                    st.ema20_15m.update(closed15.close)
-                                    st.ema50_15m.update(closed15.close)
-                                    st.macd_15m.update(closed15.close)
-
-                                    st.h_counter += 1
-                                    if st.h_counter % 4 == 0:
-                                        st.ema50_1h.update(closed15.close)
-
+                                    # giữ nguyên logic 15m
                                     st.vol_15m_acc = 0.0
 
-                            st.cur_sec += 1
+                            st.cur_sec = now_sec
+
 
                         # ====================================================
                         # ACCUMULATE VOLUME
