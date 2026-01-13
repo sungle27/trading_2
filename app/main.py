@@ -125,6 +125,33 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
                             mid = st.mid()
                             if mid:
                                 closed5, did5 = st.r5m.update(st.cur_sec, mid, st.vol_5m_acc)
+                                # DEBUG 1: confirm update() is called
+                                if st.cur_sec % 60 == 0:  # mỗi phút log 1 lần
+                                    asyncio.create_task(
+                                        send_telegram(
+                                            TELEGRAM_BOT_TOKEN,
+                                            TELEGRAM_CHAT_ID,
+                                            f"🧪 DEBUG update() called {sym} cur_sec={st.cur_sec}"
+                                        )
+                                    )
+                                    # DEBUG 2: log did5
+                                if st.cur_sec % 60 == 0:
+                                    asyncio.create_task(
+                                        send_telegram(
+                                            TELEGRAM_BOT_TOKEN,
+                                            TELEGRAM_CHAT_ID,
+                                            f"🧪 DEBUG did5={did5} {sym}"
+                                        )
+                                    )
+
+                                if did5:
+                                    asyncio.create_task(
+                                        send_telegram(
+                                            TELEGRAM_BOT_TOKEN,
+                                            TELEGRAM_CHAT_ID,
+                                            f"🔥 DEBUG did5=True {sym}"
+                                        )
+                                    )
                                 if did5 and closed5:
                                     # === DEBUG CONFIRM ===
                                     asyncio.create_task(
