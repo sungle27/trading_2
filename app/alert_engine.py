@@ -1,38 +1,47 @@
 from typing import Dict, List, Tuple
-from .config import TEST_MODE
-
-# ============================================================
-# TEST CONFIG
-# ============================================================
-TEST_MODE = "BOTH"  
-# OPTIONS:
-#   "OFF"   → chạy logic thật
-#   "LONG"  → ép LONG
-#   "SHORT" → ép SHORT
-#   "BOTH"  → LUÂN PHIÊN LONG / SHORT (để test)
-
-VOL_RATIO_MIN = 1.8        # test: 1.1 | prod: 1.4+
-EMA_GAP_MIN = 0.0015       # test nới trend
+from .config import ALERT_PROFILE
 
 
-# ============================================================
-# FAST CONTEXT FILTER (LIGHT PRE-FILTER)
-# ============================================================
+# ==============================
+# PROFILE PARAMS
+# ==============================
+PROFILE = {
+    "test": {
+        "VOL_RATIO": 1.3,
+        "EMA_GAP": 0.0008,
+        "RSI5": (35, 65),
+        "RSI15": (35, 65),
+        "MACD_MIN": -0.002,
+        "HTF_BAND": 0.005,
+    },
+    "trade": {
+        "VOL_RATIO": 1.5,
+        "EMA_GAP": 0.0012,
+        "RSI5": (40, 55),
+        "RSI15": (45, 60),
+        "MACD_MIN": -0.001,
+        "HTF_BAND": 0.002,
+    },
+}[ALERT_PROFILE]
+
+
+# ==============================
+# CONTEXT FILTER
+# ==============================
 def ctx_filters_signal(ctx: Dict[str, float], side: str) -> bool:
-    rsi5 = ctx.get("rsi_5m", 50.0)
-    rsi15 = ctx.get("rsi_15m", 50.0)
-    ema20 = ctx.get("ema20_15m", 0.0)
-    ema50 = ctx.get("ema50_15m", 0.0)
+    ema20 = ctx["ema20_15m"]
+    ema50 = ctx["ema50_15m"]
+    macd = ctx["macd_hist_15m"]
 
     if side == "LONG":
-        return rsi5 > 35 and rsi15 > 35 and ema20 >= ema50
+        return ema20 > ema50 and macd > PROFILE["MACD_MIN"]
     else:
-        return rsi5 < 65 and rsi15 < 65 and ema20 <= ema50
+        return ema20 < ema50 and macd < -PROFILE["MACD_MIN"]
 
 
-# ============================================================
-# MAIN ALERT ENGINE
-# ============================================================
+# ==============================
+# FINAL ALERT DECISION
+# ==============================
 def should_alert(
     side: str,
     mid: float,
@@ -44,112 +53,50 @@ def should_alert(
     spread_max: float,
 ) -> Tuple[bool, List[str]]:
 
-    reasons: List[str] = []
-
-    # ========================================================
-    # TEST MODE – FORCE LONG / SHORT / BOTH
-    # ========================================================
-    if TEST_MODE != "OFF":
-        if TEST_MODE == side or TEST_MODE == "BOTH":
-            return True, [f"TEST MODE: force {side}"]
-
-    # ========================================================
-    # 0. COOLDOWN & SPREAD
-    # ========================================================
     if now_s - last_alert_sec < cooldown_sec:
-        return False, ["Cooldown"]
+        return False, []
 
     if spread > spread_max:
-        return False, ["Spread too large"]
+        return False, []
 
-    reasons.append(f"Spread OK ({spread:.4%})")
+    reasons: List[str] = []
 
-    # ========================================================
-    # 1. TREND FILTER (15m)
-    # ========================================================
-    ema20 = ctx.get("ema20_15m", 0.0)
-    ema50 = ctx.get("ema50_15m", 0.0)
+    # ===== TREND GAP =====
+    gap = abs(ctx["ema20_15m"] - ctx["ema50_15m"]) / mid
+    if gap < PROFILE["EMA_GAP"]:
+        return False, []
+    reasons.append(f"EMA gap {gap:.3%}")
 
-    if ema20 == 0.0 or ema50 == 0.0:
-        return False, ["EMA not ready"]
+    # ===== VOLUME =====
+    if ctx["vol_ratio_5m"] < PROFILE["VOL_RATIO"]:
+        return False, []
+    reasons.append(f"Volume spike {ctx['vol_ratio_5m']:.2f}x")
 
-    ema_gap = abs(ema20 - ema50) / mid
-    if ema_gap < EMA_GAP_MIN:
-        return False, ["EMA gap too small"]
+    # ===== DIRECTION =====
+    if side == "LONG" and ctx["vol_dir_5m"] <= 0:
+        return False, []
+    if side == "SHORT" and ctx["vol_dir_5m"] >= 0:
+        return False, []
 
-    if side == "LONG":
-        if ema20 <= ema50:
-            return False, ["Not uptrend"]
-        reasons.append("Uptrend (EMA20 > EMA50)")
-    else:
-        if ema20 >= ema50:
-            return False, ["Not downtrend"]
-        reasons.append("Downtrend (EMA20 < EMA50)")
+    # ===== RSI =====
+    rsi5 = ctx["rsi_5m"]
+    rsi15 = ctx["rsi_15m"]
+    if not (PROFILE["RSI5"][0] <= rsi5 <= PROFILE["RSI5"][1]):
+        return False, []
+    if not (PROFILE["RSI15"][0] <= rsi15 <= PROFILE["RSI15"][1]):
+        return False, []
 
-    # ========================================================
-    # 2. VOLUME SPIKE (5m)
-    # ========================================================
-    vol_ratio = ctx.get("vol_ratio_5m", 0.0)
-    vol_dir = ctx.get("vol_dir_5m", 0.0)
+    reasons.append(f"RSI5={rsi5:.1f}, RSI15={rsi15:.1f}")
 
-    if vol_ratio < VOL_RATIO_MIN:
-        return False, [f"Volume weak ({vol_ratio:.2f}x)"]
+    # ===== HTF FILTER =====
+    ema1h = ctx["ema50_1h"]
+    band = PROFILE["HTF_BAND"]
 
-    reasons.append(f"Volume spike {vol_ratio:.2f}x")
+    if side == "LONG" and mid < ema1h * (1 - band):
+        return False, []
+    if side == "SHORT" and mid > ema1h * (1 + band):
+        return False, []
 
-    if side == "LONG" and vol_dir <= 0:
-        return False, ["No buy pressure"]
-    if side == "SHORT" and vol_dir >= 0:
-        return False, ["No sell pressure"]
+    reasons.append("HTF OK")
 
-    reasons.append("Directional volume OK")
-
-    # ========================================================
-    # 3. HTF BIAS (1h)
-    # ========================================================
-    ema_htf = ctx.get("ema50_1h", 0.0)
-    if ema_htf == 0.0:
-        return False, ["HTF EMA not ready"]
-
-    if side == "LONG" and mid <= ema_htf:
-        return False, ["Below EMA50 1h"]
-    if side == "SHORT" and mid >= ema_htf:
-        return False, ["Above EMA50 1h"]
-
-    reasons.append("HTF bias aligned")
-
-    # ========================================================
-    # 4. RSI (TEST FRIENDLY)
-    # ========================================================
-    rsi5 = ctx.get("rsi_5m", 50.0)
-    rsi15 = ctx.get("rsi_15m", 50.0)
-
-    if side == "LONG":
-        if not (40 <= rsi5 <= 70):
-            return False, ["RSI5 extreme"]
-        if not (45 <= rsi15 <= 65):
-            return False, ["RSI15 extreme"]
-    else:
-        if not (30 <= rsi5 <= 60):
-            return False, ["RSI5 extreme"]
-        if not (35 <= rsi15 <= 55):
-            return False, ["RSI15 extreme"]
-
-    reasons.append(f"RSI OK (5m={rsi5:.1f}, 15m={rsi15:.1f})")
-
-    # ========================================================
-    # 5. MACD (ANTI FAKE)
-    # ========================================================
-    macd = ctx.get("macd_hist_15m", 0.0)
-
-    if side == "LONG" and macd < -0.0005:
-        return False, ["MACD too negative"]
-    if side == "SHORT" and macd > 0.0005:
-        return False, ["MACD too positive"]
-
-    reasons.append(f"MACD OK ({macd:.5f})")
-
-    # ========================================================
-    # CONFIRMED
-    # ========================================================
     return True, reasons

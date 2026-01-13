@@ -44,3 +44,6 @@ MODEL_CLF_PATH = os.getenv("MODEL_CLF_PATH", "models/clf_lgbm.txt")
 
 LLSUNG_VER = os.getenv("LLSUNG_VER", "llsung_ver_")
 
+
+ALERT_PROFILE = os.getenv("ALERT_PROFILE", "test")  # test | trade
+
