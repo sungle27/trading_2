@@ -127,18 +127,21 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
                         # bucket changed => close previous 5m "candle"
                         if bucket_5m != st.last_5m_bucket:
                             asyncio.create_task(
-                            send_telegram(
-                                TELEGRAM_BOT_TOKEN,
-                                TELEGRAM_CHAT_ID,
-                                f"""🧪 TRADE DEBUG {sym}
-                        RSI5={st.rsi_5m.value}
-                        RSI15={st.rsi_15m.value}
-                        EMA20/50={st.ema20_15m.value:.4f}/{st.ema50_15m.value:.4f}
-                        MACD_hist={st.macd_15m.hist}
-                        VOL_ratio={st.vol_ratio_5m:.2f}
-                        Spread={st.spread():.5f}
-                        """
-                            )
+                                send_telegram(
+                                    TELEGRAM_BOT_TOKEN,
+                                    TELEGRAM_CHAT_ID,
+                                    f"""🧪 CTX SNAPSHOT {sym}
+                                    RSI5={st.rsi_5m.value:.1f} | LONG({RSI_LONG_MIN}-{RSI_LONG_MAX})
+                                    RSI15={st.rsi_15m.value:.1f}
+                                    EMA20={st.ema20_15m.value:.5f}
+                                    EMA50={st.ema50_15m.value:.5f}
+                                    EMA50_1H={st.ema50_1h.value:.5f}
+                                    MACD_hist={st.macd_15m.hist:.5f}
+                                    VOL_ratio={st.vol_ratio_5m:.2f}
+                                    VOL_dir={st.vol_dir_5m_val:.2f}
+                                    SPREAD={st.spread():.5f}
+                                    """
+                                )
                         )
 
                             if st.close_5m is not None:
