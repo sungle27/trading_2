@@ -1,5 +1,8 @@
 from __future__ import annotations
-import asyncio, json, time
+
+import asyncio
+import json
+import time
 from typing import Dict
 
 import aiohttp
@@ -10,6 +13,7 @@ from .config import (
     TELEGRAM_CHAT_ID,
     COOLDOWN_SEC,
     SPREAD_MAX,
+    ALERT_PROFILE,
 )
 
 from .symbols import FALLBACK_SYMBOLS
@@ -28,33 +32,32 @@ class SymbolState:
         self.bid = None
         self.ask = None
 
-        # ---- bucket trackers ----
+        # ---- time buckets ----
         self.last_5m_bucket = None
         self.last_15m_bucket = None
 
-        # ---- running closes for bucket (proxy candle close) ----
+        # ---- running close ----
         self.close_5m = None
         self.close_15m = None
 
-        # ---- volume accumulators per bucket ----
+        # ---- volume accumulators ----
         self.vol_5m_acc = 0.0
         self.vol_15m_acc = 0.0
 
         # ---- indicators ----
-        self.rsi_5m = RSI()
-        self.rsi_15m = RSI()
+        self.rsi_5m = RSI(14)
+        self.rsi_15m = RSI(14)
 
         self.ema20_15m = EMA(20)
         self.ema50_15m = EMA(50)
         self.macd_15m = MACD()
 
-        # NOTE: bạn đang dùng EMA50_1h như HTF filter
-        # Ở đây update theo 15m close (mỗi 15m), đủ dùng cho alert bot
+        # HTF proxy (update từ 15m)
         self.ema50_1h = EMA(50)
 
-        # ---- volume features (5m) ----
         self.vol_sma_5m = VolumeSMA(20)
         self.vol_dir_5m = DirectionalVolume()
+
         self.vol_ratio_5m = 0.0
         self.vol_dir_5m_val = 0.0
 
@@ -74,7 +77,7 @@ class SymbolState:
 
 
 # ============================================================
-# STREAMS
+# BOOK TICKER (BID / ASK)
 # ============================================================
 async def ws_bookticker(states: Dict[str, SymbolState], url: str):
     while True:
@@ -91,11 +94,14 @@ async def ws_bookticker(states: Dict[str, SymbolState], url: str):
             await asyncio.sleep(5)
 
 
+# ============================================================
+# AGG TRADE (VOLUME + TRIGGER)
+# ============================================================
 async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
     await send_telegram(
         TELEGRAM_BOT_TOKEN,
         TELEGRAM_CHAT_ID,
-        "✅ Crypto Alert Bot started (TEST / TRADE MODE ACTIVE)",
+        f"✅ Crypto Trading Bot started | PROFILE={ALERT_PROFILE.upper()}",
     )
 
     while True:
@@ -120,73 +126,55 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
                         # ====================================================
                         # 5M BUCKET (TRIGGER)
                         # ====================================================
-                        bucket_5m = now // 300  # 300s = 5 minutes
+                        bucket_5m = now // 300
                         if st.last_5m_bucket is None:
                             st.last_5m_bucket = bucket_5m
 
-                        # bucket changed => close previous 5m "candle"
                         if bucket_5m != st.last_5m_bucket:
-                            asyncio.create_task(
-                                send_telegram(
-                                    TELEGRAM_BOT_TOKEN,
-                                    TELEGRAM_CHAT_ID,
-                                    f"""🧪 CTX SNAPSHOT {sym}
-                                    RSI5={st.rsi_5m.value:.1f} | LONG({RSI_LONG_MIN}-{RSI_LONG_MAX})
-                                    RSI15={st.rsi_15m.value:.1f}
-                                    EMA20={st.ema20_15m.value:.5f}
-                                    EMA50={st.ema50_15m.value:.5f}
-                                    EMA50_1H={st.ema50_1h.value:.5f}
-                                    MACD_hist={st.macd_15m.hist:.5f}
-                                    VOL_ratio={st.vol_ratio_5m:.2f}
-                                    VOL_dir={st.vol_dir_5m_val:.2f}
-                                    SPREAD={st.spread():.5f}
-                                    """
-                                )
-                        )
-
+                            # ===== 5M CLOSED =====
                             if st.close_5m is not None:
-                                # ---- update 5m RSI ----
                                 st.rsi_5m.update(st.close_5m)
 
-                                # ---- volume features ----
                                 vol = st.vol_5m_acc
                                 sma = st.vol_sma_5m.update(vol)
-                                st.vol_ratio_5m = vol / max(sma, 1e-9)
-                                st.vol_dir_5m_val = st.vol_dir_5m.update(st.close_5m, vol)
+                                if sma:
+                                    st.vol_ratio_5m = vol / sma
+                                else:
+                                    st.vol_ratio_5m = 0.0
 
-                                # ---- build ctx ----
+                                st.vol_dir_5m_val = st.vol_dir_5m.update(
+                                    st.close_5m, vol
+                                )
+
                                 ctx = {
-                                    "rsi_5m": st.rsi_5m.value,
-                                    "rsi_15m": st.rsi_15m.value,
-                                    "ema20_15m": st.ema20_15m.value,
-                                    "ema50_15m": st.ema50_15m.value,
+                                    "rsi": st.rsi_5m.value,
+                                    "rsi15": st.rsi_15m.value,
+                                    "ema20": st.ema20_15m.value,
+                                    "ema50": st.ema50_15m.value,
                                     "ema50_1h": st.ema50_1h.value,
-                                    "macd_hist_15m": st.macd_15m.hist,
-                                    "vol_ratio_5m": st.vol_ratio_5m,
-                                    "vol_dir_5m": st.vol_dir_5m_val,
+                                    "macd": st.macd_15m.hist,
+                                    "vol_ratio": st.vol_ratio_5m,
+                                    "vol_dir": st.vol_dir_5m_val,
                                 }
 
-                                now_s = now
                                 spread = st.spread()
+                                now_s = now
 
-                                # ---- LONG (giữ đúng cấu trúc cũ) ----
-                                if ctx_filters_signal(ctx, "LONG"):
-                                    ok, reasons = should_alert(
-                                        side="LONG",
-                                        mid=st.close_5m,          # dùng close của bucket 5m
-                                        spread=spread,
-                                        ctx=ctx,
+                                # ---- LONG ----
+                                ok_ctx, reasons = ctx_filters_signal(ctx, "LONG")
+                                if ok_ctx:
+                                    ok_alert, a_reasons = should_alert(
                                         now_s=now_s,
                                         last_alert_sec=st.last_alert_sec,
-                                        cooldown_sec=COOLDOWN_SEC,
-                                        spread_max=SPREAD_MAX,
+                                        spread=spread,
                                     )
-                                    if ok:
+                                    if ok_alert:
                                         st.last_alert_sec = now_s
                                         msg = (
                                             f"🚨 LONG SIGNAL {sym}\n"
                                             f"Price: {st.close_5m:.6f}\n\n"
-                                            "📌 Reasons:\n" + "\n".join(f"- {r}" for r in reasons)
+                                            "📌 Reasons:\n"
+                                            + "\n".join(f"- {r}" for r in reasons)
                                         )
                                         asyncio.create_task(
                                             send_telegram(
@@ -196,33 +184,21 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
                                             )
                                         )
 
-                                    if not ok:
-                                        asyncio.create_task(
-                                            send_telegram(
-                                                TELEGRAM_BOT_TOKEN,
-                                                TELEGRAM_CHAT_ID,
-                                                f"❌ CTX REJECT {sym}: {', '.join(ctx_reasons)}"
-                                            )
-                                        )
-
-                                # ---- SHORT SIGNAL ----
-                                if ctx_filters_signal(ctx, "SHORT"):
-                                    ok, reasons = should_alert(
-                                        side="SHORT",
-                                        mid=st.close_5m,
-                                        spread=spread,
-                                        ctx=ctx,
+                                # ---- SHORT ----
+                                ok_ctx, reasons = ctx_filters_signal(ctx, "SHORT")
+                                if ok_ctx:
+                                    ok_alert, a_reasons = should_alert(
                                         now_s=now_s,
                                         last_alert_sec=st.last_alert_sec,
-                                        cooldown_sec=COOLDOWN_SEC,
-                                        spread_max=SPREAD_MAX,
+                                        spread=spread,
                                     )
-                                    if ok:
+                                    if ok_alert:
                                         st.last_alert_sec = now_s
                                         msg = (
                                             f"🚨 SHORT SIGNAL {sym}\n"
                                             f"Price: {st.close_5m:.6f}\n\n"
-                                            "📌 Reasons:\n" + "\n".join(f"- {r}" for r in reasons)
+                                            "📌 Reasons:\n"
+                                            + "\n".join(f"- {r}" for r in reasons)
                                         )
                                         asyncio.create_task(
                                             send_telegram(
@@ -232,17 +208,16 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
                                             )
                                         )
 
-                            # reset for new 5m bucket
+                            # reset 5m
                             st.last_5m_bucket = bucket_5m
                             st.vol_5m_acc = 0.0
 
-                        # update running close for current 5m bucket
                         st.close_5m = mid
 
                         # ====================================================
                         # 15M BUCKET (CONTEXT)
                         # ====================================================
-                        bucket_15m = now // 900  # 900s = 15 minutes
+                        bucket_15m = now // 900
                         if st.last_15m_bucket is None:
                             st.last_15m_bucket = bucket_15m
 
@@ -252,8 +227,6 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
                                 st.ema20_15m.update(st.close_15m)
                                 st.ema50_15m.update(st.close_15m)
                                 st.macd_15m.update(st.close_15m)
-
-                                # HTF proxy: update EMA50_1h theo 15m close
                                 st.ema50_1h.update(st.close_15m)
 
                             st.last_15m_bucket = bucket_15m
