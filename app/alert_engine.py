@@ -1,5 +1,9 @@
 from typing import Dict, List, Tuple
 from .config import ALERT_PROFILE
+from .config import (
+    RSI_LONG_MIN, RSI_LONG_MAX,
+    RSI_SHORT_MIN, RSI_SHORT_MAX,
+)
 
 
 # ==============================
@@ -28,16 +32,33 @@ PROFILE = {
 # ==============================
 # CONTEXT FILTER
 # ==============================
-def ctx_filters_signal(ctx: Dict[str, float], side: str) -> bool:
-    ema20 = ctx["ema20_15m"]
-    ema50 = ctx["ema50_15m"]
-    macd = ctx["macd_hist_15m"]
+# def ctx_filters_signal(ctx: Dict[str, float], side: str) -> bool:
+#     ema20 = ctx["ema20_15m"]
+#     ema50 = ctx["ema50_15m"]
+#     macd = ctx["macd_hist_15m"]
+
+#     if side == "LONG":
+#         return ema20 > ema50 and macd > PROFILE["MACD_MIN"]
+#     else:
+#         return ema20 < ema50 and macd < -PROFILE["MACD_MIN"]
+
+def ctx_filters_signal(ctx, side):
+    reasons = []
 
     if side == "LONG":
-        return ema20 > ema50 and macd > PROFILE["MACD_MIN"]
-    else:
-        return ema20 < ema50 and macd < -PROFILE["MACD_MIN"]
+        if ctx["ema20_15m"] <= ctx["ema50_15m"]:
+            reasons.append("EMA trend fail")
 
+        if not (RSI_LONG_MIN <= ctx["rsi_5m"] <= RSI_LONG_MAX):
+            reasons.append("RSI5 fail")
+
+        if ctx["vol_ratio_5m"] < PROFILE["VOL_RATIO"]:
+            reasons.append("Volume fail")
+
+    if reasons:
+        return False, reasons
+
+    return True, ["CTX OK"]
 
 # ==============================
 # FINAL ALERT DECISION
@@ -58,7 +79,13 @@ def should_alert(
 
     if spread > spread_max:
         return False, []
+    
+    if spread > spread_max:
+        return False, [f"Spread too high {spread:.5f}"]
 
+    if now_s - last_alert_sec < cooldown_sec:
+        return False, ["Cooldown active"]
+    
     reasons: List[str] = []
 
     # ===== TREND GAP =====

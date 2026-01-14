@@ -126,6 +126,21 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
 
                         # bucket changed => close previous 5m "candle"
                         if bucket_5m != st.last_5m_bucket:
+                            asyncio.create_task(
+                            send_telegram(
+                                TELEGRAM_BOT_TOKEN,
+                                TELEGRAM_CHAT_ID,
+                                f"""🧪 TRADE DEBUG {sym}
+                        RSI5={st.rsi_5m.value}
+                        RSI15={st.rsi_15m.value}
+                        EMA20/50={st.ema20_15m.value:.4f}/{st.ema50_15m.value:.4f}
+                        MACD_hist={st.macd_15m.hist}
+                        VOL_ratio={st.vol_ratio_5m:.2f}
+                        Spread={st.spread():.5f}
+                        """
+                            )
+                        )
+
                             if st.close_5m is not None:
                                 # ---- update 5m RSI ----
                                 st.rsi_5m.update(st.close_5m)
@@ -175,6 +190,15 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
                                                 TELEGRAM_BOT_TOKEN,
                                                 TELEGRAM_CHAT_ID,
                                                 msg,
+                                            )
+                                        )
+
+                                    if not ok_ctx:
+                                        asyncio.create_task(
+                                            send_telegram(
+                                                TELEGRAM_BOT_TOKEN,
+                                                TELEGRAM_CHAT_ID,
+                                                f"❌ CTX REJECT {sym}: {', '.join(ctx_reasons)}"
                                             )
                                         )
 
