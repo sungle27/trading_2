@@ -1,8 +1,10 @@
 from typing import Dict, List, Tuple
 from .config import ALERT_PROFILE
 from .config import (
-    RSI_LONG_MIN, RSI_LONG_MAX,
-    RSI_SHORT_MIN, RSI_SHORT_MAX,
+    RSI_LONG_MIN, 
+    RSI_LONG_MAX,
+    RSI_SHORT_MIN, 
+    RSI_SHORT_MAX,
 )
 
 

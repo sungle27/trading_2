@@ -193,7 +193,7 @@ async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
                                             )
                                         )
 
-                                    if not ok_ctx:
+                                    if not ok:
                                         asyncio.create_task(
                                             send_telegram(
                                                 TELEGRAM_BOT_TOKEN,

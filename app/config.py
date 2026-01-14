@@ -44,6 +44,10 @@ MODEL_CLF_PATH = os.getenv("MODEL_CLF_PATH", "models/clf_lgbm.txt")
 
 LLSUNG_VER = os.getenv("LLSUNG_VER", "llsung_ver_")
 
+RSI_LONG_MIN = os.getenv("RSI_LONG_MIN", "38")
+RSI_LONG_MAX = os.getenv("RSI_LONG_MAX", "48")
+RSI_SHORT_MIN = os.getenv("RSI_SHORT_MIN", "52")
+RSI_SHORT_MAX = os.getenv("RSI_SHORT_MAX", "62")
 
 ALERT_PROFILE = os.getenv("ALERT_PROFILE", "test")  # test | trade
 
