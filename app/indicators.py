@@ -1,131 +1,44 @@
-import math
-from dataclasses import dataclass
-from typing import Optional
+from typing import List, Tuple
 
+def ema(values: List[float], period: int) -> float:
+    if len(values) < period or period <= 1:
+        return values[-1] if values else 0.0
+    k = 2 / (period + 1)
+    e = values[0]
+    for v in values[1:]:
+        e = v * k + e * (1 - k)
+    return e
 
-# =========================
-# EMA
-# =========================
-class EMA:
-    def __init__(self, period: int):
-        self.period = period
-        self.alpha = 2.0 / (period + 1)
-        self.value: Optional[float] = None
-
-    def update(self, x: float) -> float:
-        if self.value is None:
-            self.value = x
+def rsi(values: List[float], period: int = 14) -> float:
+    if len(values) < period + 1:
+        return 50.0
+    gains = 0.0
+    losses = 0.0
+    for i in range(-period, 0):
+        diff = values[i] - values[i - 1]
+        if diff >= 0:
+            gains += diff
         else:
-            self.value = self.alpha * x + (1 - self.alpha) * self.value
-        return self.value
+            losses -= diff
+    if losses == 0:
+        return 100.0
+    rs = gains / losses
+    return 100 - (100 / (1 + rs))
 
-
-# =========================
-# RSI (Wilder)
-# =========================
-class RSI:
-    def __init__(self, period: int = 14):
-        self.period = period
-        self.avg_gain: Optional[float] = None
-        self.avg_loss: Optional[float] = None
-        self.prev: Optional[float] = None
-        self.value: Optional[float] = None
-
-    def update(self, close: float) -> float:
-        if self.prev is None:
-            self.prev = close
-            self.value = 50.0
-            return self.value
-
-        ch = close - self.prev
-        gain = max(ch, 0.0)
-        loss = max(-ch, 0.0)
-
-        if self.avg_gain is None:
-            self.avg_gain = gain
-            self.avg_loss = loss
-        else:
-            self.avg_gain = (self.avg_gain * (self.period - 1) + gain) / self.period
-            self.avg_loss = (self.avg_loss * (self.period - 1) + loss) / self.period
-
-        rs = self.avg_gain / (self.avg_loss + 1e-12)
-        self.value = 100.0 - (100.0 / (1.0 + rs))
-        self.prev = close
-        return self.value
-
-
-# =========================
-# MACD
-# =========================
-@dataclass
-class MACDState:
-    macd: float
-    signal: float
-    hist: float
-
-
-class MACD:
-    def __init__(self, fast: int = 12, slow: int = 26, signal: int = 9):
-        self.ema_fast = EMA(fast)
-        self.ema_slow = EMA(slow)
-        self.ema_signal = EMA(signal)
-        self.macd: Optional[float] = None
-        self.signal: Optional[float] = None
-        self.hist: Optional[float] = None
-
-    def update(self, close: float) -> MACDState:
-        f = self.ema_fast.update(close)
-        s = self.ema_slow.update(close)
-        self.macd = f - s
-        self.signal = self.ema_signal.update(self.macd)
-        self.hist = self.macd - self.signal
-        return MACDState(
-            macd=self.macd,
-            signal=self.signal,
-            hist=self.hist
-        )
-
-
-# =========================
-# VOLUME INDICATORS (NEW)
-# =========================
-class VolumeSMA:
-    def __init__(self, period: int = 20):
-        self.period = period
-        self.buf = []
-        self.sum = 0.0
-
-    def update(self, volume: float) -> float:
-        self.buf.append(volume)
-        self.sum += volume
-
-        if len(self.buf) > self.period:
-            self.sum -= self.buf.pop(0)
-
-        return self.sum / max(1, len(self.buf))
-
-
-class DirectionalVolume:
+def macd(values: List[float], fast: int = 12, slow: int = 26, signal: int = 9) -> Tuple[float, float, float]:
     """
-    +volume  : buy pressure
-    -volume  : sell pressure
+    returns (macd_line, signal_line, hist)
     """
-    def __init__(self):
-        self.prev_close: Optional[float] = None
-        self.value: float = 0.0
+    if len(values) < slow + signal + 5:
+        return 0.0, 0.0, 0.0
+    macd_line = ema(values, fast) - ema(values, slow)
 
-    def update(self, close: float, volume: float) -> float:
-        if self.prev_close is None:
-            self.prev_close = close
-            self.value = 0.0
-            return self.value
-
-        if close > self.prev_close:
-            self.value = volume
-        elif close < self.prev_close:
-            self.value = -volume
-        else:
-            self.value = 0.0
-
-        self.prev_close = close
-        return self.value
+    # build a small macd series for signal EMA
+    # (simple approach: approximate by applying EMA to last N macd points)
+    macd_series = []
+    for i in range(- (signal + 30), 0):
+        sub = values[:i] if i != 0 else values
+        macd_series.append(ema(sub, fast) - ema(sub, slow))
+    signal_line = ema(macd_series, signal)
+    hist = macd_line - signal_line
+    return macd_line, signal_line, hist

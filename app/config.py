@@ -1,53 +1,61 @@
 import os
-from dotenv import load_dotenv
+from dataclasses import dataclass
 
-load_dotenv()
+def env_int(key: str, default: int) -> int:
+    return int(os.getenv(key, str(default)).strip())
 
-BINANCE_FUTURES_REST = os.getenv("BINANCE_FUTURES_REST", "https://fapi.binance.com")
-BINANCE_FUTURES_WS = os.getenv("BINANCE_FUTURES_WS", "wss://fstream.binance.com/stream")
-TOP_N = int(os.getenv("TOP_N", "40"))
-TEST_MODE = os.getenv("TEST_MODE", "OFF").upper()
+def env_float(key: str, default: float) -> float:
+    return float(os.getenv(key, str(default)).strip())
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+def env_str(key: str, default: str = "") -> str:
+    return os.getenv(key, default).strip()
 
-MYSQL_ENABLED = os.getenv("MYSQL_ENABLED", "0") == "1"
-MYSQL_HOST = os.getenv("MYSQL_HOST", "127.0.0.1")
-MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
-MYSQL_USER = os.getenv("MYSQL_USER", "root")
-MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
-MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "crypto_alert")
-MYSQL_BAR_TABLE = os.getenv("MYSQL_BAR_TABLE", "bar_1s")
-MYSQL_ALERT_TABLE = os.getenv("MYSQL_ALERT_TABLE", "alerts")
+@dataclass
+class Config:
+    # Core
+    alert_profile: str = env_str("ALERT_PROFILE", "trade")   # test|trade
+    alert_mode: str = env_str("ALERT_MODE", "signal")        # signal
+    top_n: int = env_int("TOP_N", 20)
 
-ALERT_MODE = os.getenv("ALERT_MODE", "signal")  # signal | rsi | macd
+    # Binance
+    binance_rest: str = env_str("BINANCE_FUTURES_REST", "https://fapi.binance.com")
 
-COOLDOWN_SEC = int(os.getenv("COOLDOWN_SEC", "90"))
-ALERT_P_UP = float(os.getenv("ALERT_P_UP", "0.65"))
-ALERT_P_DOWN = float(os.getenv("ALERT_P_DOWN", "0.65"))
-FIXED_BPS = float(os.getenv("FIXED_BPS", "0.0004"))
-K_VOL = float(os.getenv("K_VOL", "1.2"))
-SPREAD_MAX = float(os.getenv("SPREAD_MAX", "0.0010"))
+    # Telegram
+    tg_token: str = env_str("TELEGRAM_BOT_TOKEN", "")
+    tg_chat_id: str = env_str("TELEGRAM_CHAT_ID", "")
 
-RSI_MODE = os.getenv("RSI_MODE", "threshold")
-RSI_TF = os.getenv("RSI_TF", "5m")
-RSI_OB = float(os.getenv("RSI_OB", "70"))
-RSI_OS = float(os.getenv("RSI_OS", "30"))
-RSI_COOLDOWN_SEC = int(os.getenv("RSI_COOLDOWN_SEC", "300"))
+    # Loop / debug
+    loop_sec: int = env_int("LOOP_SEC", 10)
+    heartbeat_sec: int = env_int("HEARTBEAT_SEC", 60)
+    debug_enabled: int = env_int("DEBUG_ENABLED", 1)
 
-MACD_MODE = os.getenv("MACD_MODE", "hist_cross0")
-MACD_TF = os.getenv("MACD_TF", "15m")
-MACD_COOLDOWN_SEC = int(os.getenv("MACD_COOLDOWN_SEC", "300"))
+    # Anti-spam
+    cooldown_sec: int = env_int("COOLDOWN_SEC", 600)
 
-MODEL_REG_PATH = os.getenv("MODEL_REG_PATH", "models/reg_lgbm.txt")
-MODEL_CLF_PATH = os.getenv("MODEL_CLF_PATH", "models/clf_lgbm.txt")
+    # Enable flags
+    enable_spread: int = env_int("ENABLE_SPREAD", 1)
+    enable_regime: int = env_int("ENABLE_REGIME", 1)
+    enable_rsi: int = env_int("ENABLE_RSI", 1)
+    enable_macd: int = env_int("ENABLE_MACD", 1)
 
-LLSUNG_VER = os.getenv("LLSUNG_VER", "llsung_ver_")
+    # Spread
+    spread_max: float = env_float("SPREAD_MAX", 0.0012)
 
-RSI_LONG_MIN = os.getenv("RSI_LONG_MIN", "38")
-RSI_LONG_MAX = os.getenv("RSI_LONG_MAX", "48")
-RSI_SHORT_MIN = os.getenv("RSI_SHORT_MIN", "52")
-RSI_SHORT_MAX = os.getenv("RSI_SHORT_MAX", "62")
+    # Regime / EMA gap
+    ema_fast: int = env_int("EMA_FAST", 21)
+    ema_slow: int = env_int("EMA_SLOW", 55)
+    regime_ema_gap: float = env_float("REGIME_EMA_GAP", 0.0025)  # 0.25%
 
-ALERT_PROFILE = os.getenv("ALERT_PROFILE", "test")  # test | trade
+    # RSI
+    rsi_period: int = env_int("RSI_PERIOD", 14)
+    rsi_long_min: float = env_float("RSI_LONG_MIN", 40)
+    rsi_long_max: float = env_float("RSI_LONG_MAX", 52)
+    rsi_short_min: float = env_float("RSI_SHORT_MIN", 48)
+    rsi_short_max: float = env_float("RSI_SHORT_MAX", 62)
 
+    # MACD
+    macd_fast: int = env_int("MACD_FAST", 12)
+    macd_slow: int = env_int("MACD_SLOW", 26)
+    macd_signal: int = env_int("MACD_SIGNAL", 9)
+    macd_hist_min_long: float = env_float("MACD_HIST_MIN_LONG", -0.00015)
+    macd_hist_max_short: float = env_float("MACD_HIST_MAX_SHORT", 0.00015)
