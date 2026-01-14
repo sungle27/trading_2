@@ -1,97 +1,295 @@
-import time
-from datetime import datetime, timezone
+from __future__ import annotations
+import asyncio, json, time
+from typing import Dict
 
-from config import Config
-from telegram import Telegram
-from binance_api import get_top_symbols_by_quote_volume, get_book_ticker, get_klines
-from filters import MarketSnapshot, evaluate
+import aiohttp
 
-def now_ts() -> int:
-    return int(time.time())
+from .config import (
+    BINANCE_FUTURES_WS,
+    TELEGRAM_BOT_TOKEN,
+    TELEGRAM_CHAT_ID,
+    COOLDOWN_SEC,
+    SPREAD_MAX,
+)
 
-def fmt_time() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+from .symbols import FALLBACK_SYMBOLS
+from .telegram import send_telegram
+from .indicators import RSI, EMA, MACD, VolumeSMA, DirectionalVolume
+from .alert_engine import ctx_filters_signal, should_alert
+from .utils import backoff_s
 
-def build_profile_overrides(cfg: Config):
-    """
-    TEST profile: force alerts fast.
-    TRADE profile: keep strict.
-    """
-    if cfg.alert_profile.lower() == "test":
-        cfg.enable_regime = 0
-        cfg.enable_macd = 0
-        cfg.enable_spread = 1
-        cfg.enable_rsi = 1
-        cfg.spread_max = max(cfg.spread_max, 0.0020)  # 0.2%
-        cfg.rsi_long_min, cfg.rsi_long_max = 20, 80
-        cfg.rsi_short_min, cfg.rsi_short_max = 20, 80
 
-def main():
-    cfg = Config()
-    build_profile_overrides(cfg)
+# ============================================================
+# SYMBOL STATE
+# ============================================================
+class SymbolState:
+    def __init__(self):
+        # ---- market data ----
+        self.bid = None
+        self.ask = None
 
-    tg = Telegram(cfg.tg_token, cfg.tg_chat_id)
+        # ---- bucket trackers ----
+        self.last_5m_bucket = None
+        self.last_15m_bucket = None
 
-    # startup ping
-    tg.send(
-        f"✅ Bot started\n"
-        f"Profile: <b>{cfg.alert_profile}</b> | Mode: <b>{cfg.alert_mode}</b>\n"
-        f"TopN={cfg.top_n} Loop={cfg.loop_sec}s HB={cfg.heartbeat_sec}s\n"
-        f"Filters: spread={cfg.enable_spread} regime={cfg.enable_regime} rsi={cfg.enable_rsi} macd={cfg.enable_macd}\n"
-        f"Time: {fmt_time()}"
+        # ---- running closes for bucket (proxy candle close) ----
+        self.close_5m = None
+        self.close_15m = None
+
+        # ---- volume accumulators per bucket ----
+        self.vol_5m_acc = 0.0
+        self.vol_15m_acc = 0.0
+
+        # ---- indicators ----
+        self.rsi_5m = RSI()
+        self.rsi_15m = RSI()
+
+        self.ema20_15m = EMA(20)
+        self.ema50_15m = EMA(50)
+        self.macd_15m = MACD()
+
+        # NOTE: bạn đang dùng EMA50_1h như HTF filter
+        # Ở đây update theo 15m close (mỗi 15m), đủ dùng cho alert bot
+        self.ema50_1h = EMA(50)
+
+        # ---- volume features (5m) ----
+        self.vol_sma_5m = VolumeSMA(20)
+        self.vol_dir_5m = DirectionalVolume()
+        self.vol_ratio_5m = 0.0
+        self.vol_dir_5m_val = 0.0
+
+        # ---- alert control ----
+        self.last_alert_sec = 0
+
+    def mid(self):
+        if self.bid is None or self.ask is None:
+            return None
+        return (self.bid + self.ask) / 2.0
+
+    def spread(self):
+        m = self.mid()
+        if not m:
+            return 0.0
+        return (self.ask - self.bid) / m
+
+
+# ============================================================
+# STREAMS
+# ============================================================
+async def ws_bookticker(states: Dict[str, SymbolState], url: str):
+    while True:
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.ws_connect(url, heartbeat=30) as ws:
+                    async for msg in ws:
+                        data = json.loads(msg.data).get("data", {})
+                        sym = data.get("s")
+                        if sym in states:
+                            states[sym].bid = float(data["b"])
+                            states[sym].ask = float(data["a"])
+        except Exception:
+            await asyncio.sleep(5)
+
+
+async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
+    await send_telegram(
+        TELEGRAM_BOT_TOKEN,
+        TELEGRAM_CHAT_ID,
+        "✅ Crypto Alert Bot started (TEST / TRADE MODE ACTIVE)",
     )
 
-    symbols = get_top_symbols_by_quote_volume(cfg.binance_rest, cfg.top_n)
-
-    last_heartbeat = 0
-    last_sent_by_symbol = {}  # symbol -> ts
-
     while True:
-        t0 = now_ts()
-        passed = 0
-        scanned = 0
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.ws_connect(url, heartbeat=30) as ws:
+                    async for msg in ws:
+                        data = json.loads(msg.data).get("data", {})
+                        sym = data.get("s")
+                        if sym not in states:
+                            continue
 
-        for sym in symbols:
-            scanned += 1
-            # cooldown per symbol
-            last_sent = last_sent_by_symbol.get(sym, 0)
-            if (t0 - last_sent) < cfg.cooldown_sec:
-                continue
+                        st = states[sym]
+                        qty = float(data["q"])
 
-            try:
-                bid, ask = get_book_ticker(cfg.binance_rest, sym)
-                closes = get_klines(cfg.binance_rest, sym, interval="1m", limit=220)
-                last_price = closes[-1] if closes else (bid + ask) / 2
+                        mid = st.mid()
+                        if mid is None:
+                            continue
 
-                snap = MarketSnapshot(symbol=sym, bid=bid, ask=ask, closes=closes, last_price=last_price)
-                ok, reason = evaluate(cfg, snap)
+                        now = int(time.time())
 
-                if ok:
-                    passed += 1
-                    last_sent_by_symbol[sym] = t0
-                    tg.send(
-                        f"🚨 <b>ALERT</b> {sym}\n"
-                        f"Price: {last_price}\n"
-                        f"{reason}\n"
-                        f"Time: {fmt_time()}"
-                    )
+                        # ====================================================
+                        # 5M BUCKET (TRIGGER)
+                        # ====================================================
+                        bucket_5m = now // 300  # 300s = 5 minutes
+                        if st.last_5m_bucket is None:
+                            st.last_5m_bucket = bucket_5m
 
-            except Exception as e:
-                if cfg.debug_enabled:
-                    tg.send(f"⚠️ Error {sym}: {e}")
+                        # bucket changed => close previous 5m "candle"
+                        if bucket_5m != st.last_5m_bucket:
+                            asyncio.create_task(
+                                send_telegram(
+                                    TELEGRAM_BOT_TOKEN,
+                                    TELEGRAM_CHAT_ID,
+                                    f"""🧪 CTX SNAPSHOT {sym}
+                                    RSI5={st.rsi_5m.value:.1f} | LONG({RSI_LONG_MIN}-{RSI_LONG_MAX})
+                                    RSI15={st.rsi_15m.value:.1f}
+                                    EMA20={st.ema20_15m.value:.5f}
+                                    EMA50={st.ema50_15m.value:.5f}
+                                    EMA50_1H={st.ema50_1h.value:.5f}
+                                    MACD_hist={st.macd_15m.hist:.5f}
+                                    VOL_ratio={st.vol_ratio_5m:.2f}
+                                    VOL_dir={st.vol_dir_5m_val:.2f}
+                                    SPREAD={st.spread():.5f}
+                                    """
+                                )
+                        )
 
-        # heartbeat
-        if cfg.debug_enabled and (t0 - last_heartbeat) >= cfg.heartbeat_sec:
-            last_heartbeat = t0
-            tg.send(
-                f"💓 Heartbeat\n"
-                f"Scanned={scanned} Passed={passed}\n"
-                f"Profile={cfg.alert_profile} Filters(spread/regime/rsi/macd)="
-                f"{cfg.enable_spread}/{cfg.enable_regime}/{cfg.enable_rsi}/{cfg.enable_macd}\n"
-                f"Time: {fmt_time()}"
-            )
+                            if st.close_5m is not None:
+                                # ---- update 5m RSI ----
+                                st.rsi_5m.update(st.close_5m)
 
-        time.sleep(cfg.loop_sec)
+                                # ---- volume features ----
+                                vol = st.vol_5m_acc
+                                sma = st.vol_sma_5m.update(vol)
+                                st.vol_ratio_5m = vol / max(sma, 1e-9)
+                                st.vol_dir_5m_val = st.vol_dir_5m.update(st.close_5m, vol)
+
+                                # ---- build ctx ----
+                                ctx = {
+                                    "rsi_5m": st.rsi_5m.value,
+                                    "rsi_15m": st.rsi_15m.value,
+                                    "ema20_15m": st.ema20_15m.value,
+                                    "ema50_15m": st.ema50_15m.value,
+                                    "ema50_1h": st.ema50_1h.value,
+                                    "macd_hist_15m": st.macd_15m.hist,
+                                    "vol_ratio_5m": st.vol_ratio_5m,
+                                    "vol_dir_5m": st.vol_dir_5m_val,
+                                }
+
+                                now_s = now
+                                spread = st.spread()
+
+                                # ---- LONG (giữ đúng cấu trúc cũ) ----
+                                if ctx_filters_signal(ctx, "LONG"):
+                                    ok, reasons = should_alert(
+                                        side="LONG",
+                                        mid=st.close_5m,          # dùng close của bucket 5m
+                                        spread=spread,
+                                        ctx=ctx,
+                                        now_s=now_s,
+                                        last_alert_sec=st.last_alert_sec,
+                                        cooldown_sec=COOLDOWN_SEC,
+                                        spread_max=SPREAD_MAX,
+                                    )
+                                    if ok:
+                                        st.last_alert_sec = now_s
+                                        msg = (
+                                            f"🚨 LONG SIGNAL {sym}\n"
+                                            f"Price: {st.close_5m:.6f}\n\n"
+                                            "📌 Reasons:\n" + "\n".join(f"- {r}" for r in reasons)
+                                        )
+                                        asyncio.create_task(
+                                            send_telegram(
+                                                TELEGRAM_BOT_TOKEN,
+                                                TELEGRAM_CHAT_ID,
+                                                msg,
+                                            )
+                                        )
+
+                                    if not ok:
+                                        asyncio.create_task(
+                                            send_telegram(
+                                                TELEGRAM_BOT_TOKEN,
+                                                TELEGRAM_CHAT_ID,
+                                                f"❌ CTX REJECT {sym}: {', '.join(ctx_reasons)}"
+                                            )
+                                        )
+
+                                # ---- SHORT SIGNAL ----
+                                if ctx_filters_signal(ctx, "SHORT"):
+                                    ok, reasons = should_alert(
+                                        side="SHORT",
+                                        mid=st.close_5m,
+                                        spread=spread,
+                                        ctx=ctx,
+                                        now_s=now_s,
+                                        last_alert_sec=st.last_alert_sec,
+                                        cooldown_sec=COOLDOWN_SEC,
+                                        spread_max=SPREAD_MAX,
+                                    )
+                                    if ok:
+                                        st.last_alert_sec = now_s
+                                        msg = (
+                                            f"🚨 SHORT SIGNAL {sym}\n"
+                                            f"Price: {st.close_5m:.6f}\n\n"
+                                            "📌 Reasons:\n" + "\n".join(f"- {r}" for r in reasons)
+                                        )
+                                        asyncio.create_task(
+                                            send_telegram(
+                                                TELEGRAM_BOT_TOKEN,
+                                                TELEGRAM_CHAT_ID,
+                                                msg,
+                                            )
+                                        )
+
+                            # reset for new 5m bucket
+                            st.last_5m_bucket = bucket_5m
+                            st.vol_5m_acc = 0.0
+
+                        # update running close for current 5m bucket
+                        st.close_5m = mid
+
+                        # ====================================================
+                        # 15M BUCKET (CONTEXT)
+                        # ====================================================
+                        bucket_15m = now // 900  # 900s = 15 minutes
+                        if st.last_15m_bucket is None:
+                            st.last_15m_bucket = bucket_15m
+
+                        if bucket_15m != st.last_15m_bucket:
+                            if st.close_15m is not None:
+                                st.rsi_15m.update(st.close_15m)
+                                st.ema20_15m.update(st.close_15m)
+                                st.ema50_15m.update(st.close_15m)
+                                st.macd_15m.update(st.close_15m)
+
+                                # HTF proxy: update EMA50_1h theo 15m close
+                                st.ema50_1h.update(st.close_15m)
+
+                            st.last_15m_bucket = bucket_15m
+                            st.vol_15m_acc = 0.0
+
+                        st.close_15m = mid
+
+                        # ====================================================
+                        # ACCUMULATE VOLUME
+                        # ====================================================
+                        st.vol_5m_acc += qty
+                        st.vol_15m_acc += qty
+
+        except Exception:
+            await asyncio.sleep(backoff_s(1))
+
+
+# ============================================================
+# MAIN
+# ============================================================
+async def main():
+    symbols = FALLBACK_SYMBOLS
+    states = {s: SymbolState() for s in symbols}
+
+    url_book = f"{BINANCE_FUTURES_WS}?streams=" + "/".join(
+        f"{s.lower()}@bookTicker" for s in symbols
+    )
+    url_trade = f"{BINANCE_FUTURES_WS}?streams=" + "/".join(
+        f"{s.lower()}@aggTrade" for s in symbols
+    )
+
+    await asyncio.gather(
+        ws_bookticker(states, url_book),
+        ws_aggtrade(states, url_trade),
+    )
+
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
