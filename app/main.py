@@ -1,109 +1,256 @@
+from __future__ import annotations
+
+import asyncio
+import json
 import time
+from typing import Dict
 
-from dotenv import load_dotenv
+import aiohttp
 
-from config import Config
-from utils import now_ts, utc_now_str
-from telegram import TelegramNotifier
-from binance_client import BinanceFuturesClient
-from alert_engine import MarketData, evaluate_signal
+from .config import (
+    BINANCE_FUTURES_WS,
+    TELEGRAM_BOT_TOKEN,
+    TELEGRAM_CHAT_ID,
+    ALERT_PROFILE,
+    COOLDOWN_SEC,
+    SPREAD_MAX,
+)
 
-def apply_profile_overrides(cfg: Config) -> None:
-    """
-    test: mục tiêu ra alert nhanh để test flow
-    trade: dùng strict theo env
-    """
-    if cfg.ALERT_PROFILE.lower() == "test":
-        cfg.ENABLE_REGIME = 0
-        cfg.ENABLE_MACD = 0
-        cfg.ENABLE_SPREAD = 1
-        cfg.ENABLE_RSI = 1
+from .symbols import FALLBACK_SYMBOLS
+from .telegram import send_telegram
+from .indicators import RSI, EMA, MACD, VolumeSMA, DirectionalVolume
+from .alert_engine import ctx_filters_signal, should_alert
+from .utils import backoff_s
 
-        # nới RSI để pass dễ
-        cfg.RSI_LONG_MIN, cfg.RSI_LONG_MAX = 20, 80
-        cfg.RSI_SHORT_MIN, cfg.RSI_SHORT_MAX = 20, 80
 
-        # nới spread để tránh bị chặn
-        cfg.SPREAD_MAX = max(cfg.SPREAD_MAX, 0.0020)  # 0.2%
+# ============================================================
+# SYMBOL STATE
+# ============================================================
+class SymbolState:
+    def __init__(self):
+        # market
+        self.bid = None
+        self.ask = None
 
-def main():
-    load_dotenv()  # đọc .env
+        # buckets
+        self.last_5m_bucket = None
+        self.last_15m_bucket = None
 
-    cfg = Config()
-    apply_profile_overrides(cfg)
+        # close price
+        self.close_5m = None
+        self.close_15m = None
 
-    tg = TelegramNotifier(cfg.TELEGRAM_BOT_TOKEN, cfg.TELEGRAM_CHAT_ID)
-    bx = BinanceFuturesClient(cfg.BINANCE_FUTURES_REST)
+        # volume
+        self.vol_5m = 0.0
+        self.vol_15m = 0.0
 
-    # Startup ping (để biết chắc telegram OK)
-    tg.send(
-        f"✅ Bot started\n"
-        f"Profile=<b>{cfg.ALERT_PROFILE}</b> Mode=<b>{cfg.ALERT_MODE}</b>\n"
-        f"TopN={cfg.TOP_N} Loop={cfg.LOOP_SEC}s Cooldown={cfg.COOLDOWN_SEC}s\n"
-        f"Filters spread/regime/rsi/macd="
-        f"{cfg.ENABLE_SPREAD}/{cfg.ENABLE_REGIME}/{cfg.ENABLE_RSI}/{cfg.ENABLE_MACD}\n"
-        f"Time={utc_now_str()}"
+        # indicators
+        self.rsi_5m = RSI(14)
+        self.rsi_15m = RSI(14)
+
+        self.ema20_15m = EMA(20)
+        self.ema50_15m = EMA(50)
+        self.macd_15m = MACD()
+        self.ema50_1h = EMA(50)
+
+        self.vol_sma_5m = VolumeSMA(20)
+        self.vol_dir_5m = DirectionalVolume()
+
+        self.vol_ratio_5m = 0.0
+        self.vol_dir_5m_val = 0.0
+
+        # alert control
+        self.last_alert_sec = 0
+
+    def mid(self):
+        if self.bid is None or self.ask is None:
+            return None
+        return (self.bid + self.ask) / 2
+
+    def spread(self):
+        m = self.mid()
+        if not m:
+            return 0.0
+        return (self.ask - self.bid) / m
+
+
+# ============================================================
+# WS: BOOK TICKER
+# ============================================================
+async def ws_bookticker(states: Dict[str, SymbolState], url: str):
+    print(">>> ws_bookticker started")
+    while True:
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.ws_connect(url, heartbeat=30) as ws:
+                    async for msg in ws:
+                        data = json.loads(msg.data).get("data", {})
+                        sym = data.get("s")
+                        if sym in states:
+                            states[sym].bid = float(data["b"])
+                            states[sym].ask = float(data["a"])
+        except Exception as e:
+            print("bookticker error:", e)
+            await asyncio.sleep(5)
+
+
+# ============================================================
+# WS: AGG TRADE (CORE LOOP)
+# ============================================================
+async def ws_aggtrade(states: Dict[str, SymbolState], url: str):
+    print(">>> ws_aggtrade started")
+
+    # ---- START MESSAGE (BẮT BUỘC) ----
+    await send_telegram(
+        TELEGRAM_BOT_TOKEN,
+        TELEGRAM_CHAT_ID,
+        f"✅ Bot STARTED | PROFILE={ALERT_PROFILE.upper()} | symbols={len(states)}",
     )
 
-    symbols = bx.top_symbols_by_quote_volume(cfg.TOP_N)
-
-    last_heartbeat = 0
-    last_sent = {}  # symbol -> ts
-
     while True:
-        t = now_ts()
-        scanned = 0
-        passed = 0
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.ws_connect(url, heartbeat=30) as ws:
+                    async for msg in ws:
+                        data = json.loads(msg.data).get("data", {})
+                        sym = data.get("s")
+                        if sym not in states:
+                            continue
 
-        # refresh top symbols mỗi 10 phút cho sát volume (optional)
-        if t % 600 < cfg.LOOP_SEC:
-            try:
-                symbols = bx.top_symbols_by_quote_volume(cfg.TOP_N)
-            except Exception:
-                pass
+                        st = states[sym]
+                        qty = float(data["q"])
+                        mid = st.mid()
+                        if mid is None:
+                            continue
 
-        for sym in symbols:
-            scanned += 1
+                        now = int(time.time())
 
-            # cooldown theo symbol
-            prev = last_sent.get(sym, 0)
-            if (t - prev) < cfg.COOLDOWN_SEC:
-                continue
+                        # =======================
+                        # 5M BUCKET
+                        # =======================
+                        bucket_5m = now // 300
+                        if st.last_5m_bucket is None:
+                            st.last_5m_bucket = bucket_5m
 
-            try:
-                bid, ask = bx.book_ticker(sym)
-                closes = bx.klines_close(sym, interval="1m", limit=240)
-                last_price = closes[-1] if closes else (bid + ask) / 2
+                        if bucket_5m != st.last_5m_bucket:
+                            if st.close_5m is not None:
+                                # update indicators
+                                st.rsi_5m.update(st.close_5m)
 
-                md = MarketData(symbol=sym, bid=bid, ask=ask, closes=closes, last_price=last_price)
-                ok, reason = evaluate_signal(cfg, md)
+                                vol = st.vol_5m
+                                sma = st.vol_sma_5m.update(vol)
+                                st.vol_ratio_5m = vol / sma if sma else 0.0
+                                st.vol_dir_5m_val = st.vol_dir_5m.update(
+                                    st.close_5m, vol
+                                )
 
-                if ok:
-                    passed += 1
-                    last_sent[sym] = t
-                    tg.send(
-                        f"🚨 <b>ALERT</b> {sym}\n"
-                        f"Price={last_price}\n"
-                        f"{reason}\n"
-                        f"Time={utc_now_str()}"
-                    )
+                                ctx = {
+                                    "rsi": st.rsi_5m.value,
+                                    "rsi15": st.rsi_15m.value,
+                                    "ema20": st.ema20_15m.value,
+                                    "ema50": st.ema50_15m.value,
+                                    "ema50_1h": st.ema50_1h.value,
+                                    "macd": st.macd_15m.hist,
+                                    "vol_ratio": st.vol_ratio_5m,
+                                    "vol_dir": st.vol_dir_5m_val,
+                                }
 
-            except Exception as e:
-                if cfg.DEBUG_ENABLED:
-                    tg.send(f"⚠️ Error {sym}: {e}")
+                                spread = st.spread()
 
-        # Heartbeat (để bạn biết bot đang chạy dù không có signal)
-        if cfg.DEBUG_ENABLED and (t - last_heartbeat) >= cfg.HEARTBEAT_SEC:
-            last_heartbeat = t
-            tg.send(
-                f"💓 Heartbeat\n"
-                f"Scanned={scanned} Passed={passed} Symbols={len(symbols)}\n"
-                f"Filters spread/regime/rsi/macd="
-                f"{cfg.ENABLE_SPREAD}/{cfg.ENABLE_REGIME}/{cfg.ENABLE_RSI}/{cfg.ENABLE_MACD}\n"
-                f"Time={utc_now_str()}"
-            )
+                                # -------- LONG --------
+                                ok_ctx, reasons = ctx_filters_signal(ctx, "LONG")
+                                if ok_ctx:
+                                    ok_alert, _ = should_alert(
+                                        now_s=now,
+                                        last_alert_sec=st.last_alert_sec,
+                                        spread=spread,
+                                    )
+                                    if ok_alert:
+                                        st.last_alert_sec = now
+                                        asyncio.create_task(
+                                            send_telegram(
+                                                TELEGRAM_BOT_TOKEN,
+                                                TELEGRAM_CHAT_ID,
+                                                f"🚨 LONG {sym}\nPrice: {st.close_5m:.6f}",
+                                            )
+                                        )
 
-        time.sleep(cfg.LOOP_SEC)
+                                # -------- SHORT --------
+                                ok_ctx, reasons = ctx_filters_signal(ctx, "SHORT")
+                                if ok_ctx:
+                                    ok_alert, _ = should_alert(
+                                        now_s=now,
+                                        last_alert_sec=st.last_alert_sec,
+                                        spread=spread,
+                                    )
+                                    if ok_alert:
+                                        st.last_alert_sec = now
+                                        asyncio.create_task(
+                                            send_telegram(
+                                                TELEGRAM_BOT_TOKEN,
+                                                TELEGRAM_CHAT_ID,
+                                                f"🚨 SHORT {sym}\nPrice: {st.close_5m:.6f}",
+                                            )
+                                        )
+
+                            # reset 5m
+                            st.last_5m_bucket = bucket_5m
+                            st.vol_5m = 0.0
+
+                        st.close_5m = mid
+
+                        # =======================
+                        # 15M BUCKET
+                        # =======================
+                        bucket_15m = now // 900
+                        if st.last_15m_bucket is None:
+                            st.last_15m_bucket = bucket_15m
+
+                        if bucket_15m != st.last_15m_bucket:
+                            if st.close_15m is not None:
+                                st.rsi_15m.update(st.close_15m)
+                                st.ema20_15m.update(st.close_15m)
+                                st.ema50_15m.update(st.close_15m)
+                                st.macd_15m.update(st.close_15m)
+                                st.ema50_1h.update(st.close_15m)
+
+                            st.last_15m_bucket = bucket_15m
+                            st.vol_15m = 0.0
+
+                        st.close_15m = mid
+
+                        # =======================
+                        # VOLUME ACCUM
+                        # =======================
+                        st.vol_5m += qty
+                        st.vol_15m += qty
+
+        except Exception as e:
+            print("aggtrade error:", e)
+            await asyncio.sleep(backoff_s(1))
+
+
+# ============================================================
+# MAIN
+# ============================================================
+async def main():
+    symbols = FALLBACK_SYMBOLS
+    states = {s: SymbolState() for s in symbols}
+
+    url_book = f"{BINANCE_FUTURES_WS}?streams=" + "/".join(
+        f"{s.lower()}@bookTicker" for s in symbols
+    )
+    url_trade = f"{BINANCE_FUTURES_WS}?streams=" + "/".join(
+        f"{s.lower()}@aggTrade" for s in symbols
+    )
+
+    print(f">>> starting bot | symbols={len(symbols)}")
+
+    await asyncio.gather(
+        ws_bookticker(states, url_book),
+        ws_aggtrade(states, url_trade),
+    )
+
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

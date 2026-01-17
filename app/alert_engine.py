@@ -1,86 +1,94 @@
-from dataclasses import dataclass
-from typing import List, Tuple
+from __future__ import annotations
 
-from config import Config
-from indicators import ema, rsi, macd
+from .config import (
+    ALERT_PROFILE,
+    ENABLE_SPREAD,
+    ENABLE_REGIME,
+    ENABLE_RSI,
+    ENABLE_MACD,
+    REGIME_EMA_GAP,
+    RSI_LONG_MIN,
+    RSI_LONG_MAX,
+    RSI_SHORT_MIN,
+    RSI_SHORT_MAX,
+    MACD_HIST_MIN_LONG,
+    MACD_HIST_MAX_SHORT,
+    COOLDOWN_SEC,
+    SPREAD_MAX,
+)
 
-@dataclass
-class MarketData:
-    symbol: str
-    bid: float
-    ask: float
-    closes: List[float]
-    last_price: float
 
-def spread_ratio(bid: float, ask: float) -> float:
-    if bid <= 0:
-        return 1.0
-    return (ask - bid) / bid
-
-def evaluate_signal(cfg: Config, m: MarketData) -> Tuple[bool, str]:
+# ============================================================
+# CONTEXT FILTER
+# ============================================================
+def ctx_filters_signal(ctx: dict, side: str):
     """
-    returns: (should_alert, reason_text)
+    ctx keys:
+        rsi, rsi15
+        ema20, ema50, ema50_1h
+        macd
+        vol_ratio, vol_dir
     """
-    reasons: List[str] = []
 
-    # 1) SPREAD
-    if cfg.ENABLE_SPREAD:
-        sp = spread_ratio(m.bid, m.ask)
-        if sp > cfg.SPREAD_MAX:
-            return False, f"SPREAD_FAIL sp={sp:.5f} > {cfg.SPREAD_MAX:.5f}"
-        reasons.append(f"SPREAD_OK sp={sp:.5f}")
-    else:
-        reasons.append("SPREAD_OFF")
+    reasons = []
 
-    # 2) REGIME / TREND by EMA gap (%)
-    # gap = |EMAfast - EMAslow| / price
-    if cfg.ENABLE_REGIME:
-        ef = ema(m.closes, cfg.EMA_FAST)
-        es = ema(m.closes, cfg.EMA_SLOW)
-        denom = m.last_price if m.last_price > 0 else 1.0
-        gap = abs(ef - es) / denom
-        if gap < cfg.REGIME_EMA_GAP:
-            return False, f"REGIME_FAIL gap={gap:.5f} < {cfg.REGIME_EMA_GAP:.5f}"
-        trend = "UP" if ef >= es else "DOWN"
-        reasons.append(f"REGIME_OK {trend} gap={gap:.5f}")
-    else:
-        reasons.append("REGIME_OFF")
+    # ===== REGIME / TREND =====
+    if ENABLE_REGIME:
+        if ctx["ema20"] is None or ctx["ema50"] is None:
+            return False, ["EMA not ready"]
 
-    # 3) RSI (entry zone)
-    side = "BOTH"
-    r = rsi(m.closes, cfg.RSI_PERIOD)
+        gap = abs(ctx["ema20"] - ctx["ema50"]) / ctx["ema50"]
 
-    if cfg.ENABLE_RSI:
-        long_ok = cfg.RSI_LONG_MIN <= r <= cfg.RSI_LONG_MAX
-        short_ok = cfg.RSI_SHORT_MIN <= r <= cfg.RSI_SHORT_MAX
-        if not (long_ok or short_ok):
-            return False, f"RSI_FAIL rsi={r:.2f}"
-        side = "LONG" if long_ok else "SHORT"
-        reasons.append(f"RSI_OK {side} rsi={r:.2f}")
-    else:
-        reasons.append(f"RSI_OFF rsi={r:.2f}")
+        if gap < REGIME_EMA_GAP:
+            reasons.append("EMA gap too small")
 
-    # 4) MACD histogram confirm
-    if cfg.ENABLE_MACD:
-        _, _, hist = macd(m.closes, cfg.MACD_FAST, cfg.MACD_SLOW, cfg.MACD_SIGNAL)
+        if side == "LONG" and ctx["ema20"] <= ctx["ema50"]:
+            reasons.append("EMA trend down")
 
-        # Rule theo config của bạn:
-        # - LONG: hist >= MACD_HIST_MIN_LONG (không quá âm)
-        # - SHORT: hist <= MACD_HIST_MAX_SHORT (không quá dương)
-        # Nếu RSI OFF => cho pass theo “near 0 avoidance” nhẹ.
-        if side == "LONG":
-            if hist < cfg.MACD_HIST_MIN_LONG:
-                return False, f"MACD_FAIL_LONG hist={hist:.6f} < {cfg.MACD_HIST_MIN_LONG:.6f}"
-        elif side == "SHORT":
-            if hist > cfg.MACD_HIST_MAX_SHORT:
-                return False, f"MACD_FAIL_SHORT hist={hist:.6f} > {cfg.MACD_HIST_MAX_SHORT:.6f}"
-        else:
-            # RSI OFF: chỉ chặn chop cực mạnh (hist rất gần 0)
-            if -1e-6 < hist < 1e-6:
-                return False, f"MACD_FAIL hist={hist:.6f} near0"
+        if side == "SHORT" and ctx["ema20"] >= ctx["ema50"]:
+            reasons.append("EMA trend up")
 
-        reasons.append(f"MACD_OK hist={hist:.6f}")
-    else:
-        reasons.append("MACD_OFF")
+    # ===== RSI =====
+    if ENABLE_RSI:
+        if ctx["rsi"] is None:
+            return False, ["RSI not ready"]
 
-    return True, " | ".join(reasons)
+        if side == "LONG" and not (RSI_LONG_MIN <= ctx["rsi"] <= RSI_LONG_MAX):
+            reasons.append("RSI out of LONG range")
+
+        if side == "SHORT" and not (RSI_SHORT_MIN <= ctx["rsi"] <= RSI_SHORT_MAX):
+            reasons.append("RSI out of SHORT range")
+
+    # ===== MACD =====
+    if ENABLE_MACD:
+        if ctx["macd"] is None:
+            return False, ["MACD not ready"]
+
+        if side == "LONG" and ctx["macd"] < MACD_HIST_MIN_LONG:
+            reasons.append("MACD weak")
+
+        if side == "SHORT" and ctx["macd"] > MACD_HIST_MAX_SHORT:
+            reasons.append("MACD weak")
+
+    if reasons:
+        return False, reasons
+
+    return True, ["CTX OK"]
+
+
+# ============================================================
+# FINAL ALERT GATE
+# ============================================================
+def should_alert(*, now_s: int, last_alert_sec: int, spread: float):
+    reasons = []
+
+    if ENABLE_SPREAD and spread > SPREAD_MAX:
+        reasons.append("Spread too high")
+
+    if now_s - last_alert_sec < COOLDOWN_SEC:
+        reasons.append("Cooldown active")
+
+    if reasons:
+        return False, reasons
+
+    return True, ["ALERT OK"]
