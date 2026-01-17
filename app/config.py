@@ -1,68 +1,61 @@
 import os
+from dataclasses import dataclass
 
-ALERT_PROFILE = os.getenv("ALERT_PROFILE", "trade")
+def _s(key: str, default: str = "") -> str:
+    return os.getenv(key, default).strip()
 
-USE_TREND_FILTER = os.getenv("USE_TREND_FILTER", "1") == "1"
-USE_VOLUME_FILTER = os.getenv("USE_VOLUME_FILTER", "1") == "1"
-USE_RSI_FILTER = os.getenv("USE_RSI_FILTER", "1") == "1"
-USE_MACD_FILTER = os.getenv("USE_MACD_FILTER", "0") == "1"
-USE_HTF_FILTER = os.getenv("USE_HTF_FILTER", "0") == "1"
+def _i(key: str, default: int) -> int:
+    return int(os.getenv(key, str(default)).strip())
 
-VOL_RATIO_TRADE = float(os.getenv("VOL_RATIO_TRADE", 1.3))
-VOL_RATIO_TEST = float(os.getenv("VOL_RATIO_TEST", 1.15))
+def _f(key: str, default: float) -> float:
+    return float(os.getenv(key, str(default)).strip())
 
-RSI_LONG_MIN = float(os.getenv("RSI_LONG_MIN", 40))
-RSI_LONG_MAX = float(os.getenv("RSI_LONG_MAX", 55))
-RSI_SHORT_MIN = float(os.getenv("RSI_SHORT_MIN", 45))
-RSI_SHORT_MAX = float(os.getenv("RSI_SHORT_MAX", 65))
+@dataclass
+class Config:
+    # ===== Binance =====
+    BINANCE_FUTURES_REST: str = _s("BINANCE_FUTURES_REST", "https://fapi.binance.com")
+    BINANCE_FUTURES_WS: str = _s("BINANCE_FUTURES_WS", "wss://fstream.binance.com/stream")
+    TOP_N: int = _i("TOP_N", 20)
 
-EMA_GAP = float(os.getenv("EMA_GAP", 0.0008))
+    # ===== Alert mode =====
+    ALERT_PROFILE: str = _s("ALERT_PROFILE", "trade")  # test | trade
+    ALERT_MODE: str = _s("ALERT_MODE", "signal")       # signal | rsi | macd (mình giữ signal)
 
-MACD_HIST_MIN_LONG = float(os.getenv("MACD_HIST_MIN_LONG", -0.0015))
-MACD_HIST_MAX_SHORT = float(os.getenv("MACD_HIST_MAX_SHORT", 0.0015))
+    # ===== Telegram =====
+    TELEGRAM_BOT_TOKEN: str = _s("TELEGRAM_BOT_TOKEN", "")
+    TELEGRAM_CHAT_ID: str = _s("TELEGRAM_CHAT_ID", "")
 
-SPREAD_MAX = float(os.getenv("SPREAD_MAX", 0.001))
-COOLDOWN_SEC = int(os.getenv("COOLDOWN_SEC", 600))
+    # ===== Loop / Debug =====
+    LOOP_SEC: int = _i("LOOP_SEC", 10)                 # thêm mới: mỗi bao lâu scan
+    HEARTBEAT_SEC: int = _i("HEARTBEAT_SEC", 60)       # thêm mới: ping sống
+    DEBUG_ENABLED: int = _i("DEBUG_ENABLED", 1)
 
-import os
+    # ===== Global Control =====
+    COOLDOWN_SEC: int = _i("COOLDOWN_SEC", 600)
+    SPREAD_MAX: float = _f("SPREAD_MAX", 0.0012)
 
-# ===== BINANCE =====
-BINANCE_FUTURES_WS = os.getenv(
-    "BINANCE_FUTURES_WS",
-    "wss://fstream.binance.com/stream"
-)
+    # ===== Enable flags (bật/tắt từng bộ) =====
+    ENABLE_SPREAD: int = _i("ENABLE_SPREAD", 1)
+    ENABLE_REGIME: int = _i("ENABLE_REGIME", 1)
+    ENABLE_RSI: int = _i("ENABLE_RSI", 1)
+    ENABLE_MACD: int = _i("ENABLE_MACD", 1)
 
-# ===== TELEGRAM =====
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+    # ===== Regime / Trend =====
+    # NOTE: REGIME_EMA_GAP nên là tỉ lệ: 0.0025 = 0.25%
+    REGIME_EMA_GAP: float = _f("REGIME_EMA_GAP", 0.0025)
+    EMA_FAST: int = _i("EMA_FAST", 21)     # thêm mới (default hợp lý)
+    EMA_SLOW: int = _i("EMA_SLOW", 55)
 
-# ===== MODE =====
-ALERT_PROFILE = os.getenv("ALERT_PROFILE", "trade")
+    # ===== RSI =====
+    RSI_PERIOD: int = _i("RSI_PERIOD", 14)  # thêm mới
+    RSI_LONG_MIN: float = _f("RSI_LONG_MIN", 40)
+    RSI_LONG_MAX: float = _f("RSI_LONG_MAX", 52)
+    RSI_SHORT_MIN: float = _f("RSI_SHORT_MIN", 46)
+    RSI_SHORT_MAX: float = _f("RSI_SHORT_MAX", 62)
 
-# ===== FILTER SWITCH =====
-USE_TREND_FILTER = os.getenv("USE_TREND_FILTER", "1") == "1"
-USE_VOLUME_FILTER = os.getenv("USE_VOLUME_FILTER", "1") == "1"
-USE_RSI_FILTER = os.getenv("USE_RSI_FILTER", "1") == "1"
-USE_MACD_FILTER = os.getenv("USE_MACD_FILTER", "0") == "1"
-USE_HTF_FILTER = os.getenv("USE_HTF_FILTER", "0") == "1"
-
-# ===== VOLUME =====
-VOL_RATIO_TRADE = float(os.getenv("VOL_RATIO_TRADE", 1.3))
-VOL_RATIO_TEST = float(os.getenv("VOL_RATIO_TEST", 1.15))
-
-# ===== RSI =====
-RSI_LONG_MIN = float(os.getenv("RSI_LONG_MIN", 40))
-RSI_LONG_MAX = float(os.getenv("RSI_LONG_MAX", 55))
-RSI_SHORT_MIN = float(os.getenv("RSI_SHORT_MIN", 45))
-RSI_SHORT_MAX = float(os.getenv("RSI_SHORT_MAX", 65))
-
-# ===== EMA =====
-EMA_GAP = float(os.getenv("EMA_GAP", 0.0008))
-
-# ===== MACD =====
-MACD_HIST_MIN_LONG = float(os.getenv("MACD_HIST_MIN_LONG", -0.0015))
-MACD_HIST_MAX_SHORT = float(os.getenv("MACD_HIST_MAX_SHORT", 0.0015))
-
-# ===== RISK CONTROL =====
-SPREAD_MAX = float(os.getenv("SPREAD_MAX", 0.001))
-COOLDOWN_SEC = int(os.getenv("COOLDOWN_SEC", 600))
+    # ===== MACD =====
+    MACD_FAST: int = _i("MACD_FAST", 12)     # thêm mới
+    MACD_SLOW: int = _i("MACD_SLOW", 26)
+    MACD_SIGNAL: int = _i("MACD_SIGNAL", 9)
+    MACD_HIST_MIN_LONG: float = _f("MACD_HIST_MIN_LONG", -0.00015)
+    MACD_HIST_MAX_SHORT: float = _f("MACD_HIST_MAX_SHORT", 0.00015)
